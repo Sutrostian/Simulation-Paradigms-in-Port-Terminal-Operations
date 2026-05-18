@@ -38,11 +38,11 @@ ggplot(tabla, aes(y = fct_infreq(`Integrates optimization?`), fill = `Integrates
 ggsave("outputs/integrates_optimization.png", width = 8, height = 5)
 
 # =========================
-# Quinto gráfico (OPTIMIZATION METHOD)
+# Quinto gráfico (TOP 10 OPTIMIZATION METHOD)
 # =========================
 
-ggplot(tabla, aes(y = fct_infreq(`Optimization method`), fill = `Optimization method`)) + geom_bar() + theme_minimal() + theme(legend.position = "none") + labs(title = "Optimization Methods", x = "Count", y = "")
-ggsave("outputs/optimization_method.png", width = 12, height = 8)
+ggplot(head(subset(as.data.frame(sort(table(tabla$`Optimization method`), decreasing = TRUE)), Var1 != ""), 10), aes(y = reorder(Var1, Freq), x = Freq, fill = Var1)) + geom_bar(stat = "identity") + theme_minimal() + theme(legend.position = "none") + labs(title = "Top 10 Optimization Methods", x = "Count", y = "")
+ggsave("outputs/top_optimization_methods.png", width = 13, height = 7)
 
 # =========================
 # Sexto gráfico (TERMINAL TYPE)
