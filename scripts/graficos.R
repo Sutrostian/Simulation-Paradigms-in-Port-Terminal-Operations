@@ -23,12 +23,13 @@ ggsave("outputs/paradigms.png", width = 10, height = 6) # comando para guardar e
 ggplot(tabla, aes(y = fct_infreq(`Hybrid combination`), fill = `Hybrid combination`)) + geom_bar() + theme_minimal() + theme(legend.position = "none") + labs(title = "Hybrid Combinations", x = "Count", y = "")
 ggsave("outputs/hybrid_combination.png", width = 10, height = 5)
 
+
 # =========================
-# Tercer gráfico (TOOL/SOFTWARE)
+# Tercer gráfico (TOP 10 TOOL/SOFTWARE)
 # =========================
 
-ggplot(tabla,aes(y = fct_infreq(`Tool / Software`),fill = `Tool / Software`)) +geom_bar() +theme_minimal() +theme(legend.position = "none") +labs(title = "Tools / Software Used",x = "Count",y = "")
-ggsave("outputs/tools_software.png",width = 12,height = 8)
+ggplot(head(subset(as.data.frame(sort(table(tabla$`Tool / Software`), decreasing = TRUE)), Var1 != ""), 10), aes(y = reorder(Var1, Freq), x = Freq, fill = Var1)) + geom_bar(stat = "identity") + theme_minimal() + theme(legend.position = "none") + labs(title = "Top 10 Tools / Software", x = "Count", y = "")
+ggsave("outputs/top_tools_software.png", width = 12, height = 7)
 
 # =========================
 # Cuarto gráfico (INTEGRATES OPTIMIZATION?)
