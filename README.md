@@ -31,7 +31,7 @@ project/
 │   └── ...
 │
 ├── scripts/
-│   └── analysis.R
+│   └── graficos.R
 │
 └── README.md
 ```
