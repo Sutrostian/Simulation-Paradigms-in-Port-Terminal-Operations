@@ -8,7 +8,8 @@ library(RColorBrewer)
 # =========================
 # Cargar datos
 # =========================
-tabla <- read_excel("data/data.xlsx", skip = 2)
+tabla <- read_excel("data/data.xlsx", sheet = "Extracted Data + Decision", skip = 2)
+tabla <- subset(tabla, `Phase 2 Decision` == "Include") # solo incluir los include.
 
 # =========================
 # Primer gráfico (MAIN PARADIGM)
@@ -141,8 +142,10 @@ ggsave("outputs/considers_sustainability.png", width = 8, height = 5)
 # Decimoctavo gráfico (REGION)
 # =========================
 
-ggplot(tabla, aes(x = "", fill = Region)) + geom_bar(width = 1, color = "black", size = 0.7) + coord_polar(theta = "y") + theme_void() + scale_fill_brewer(palette = "Set2") + labs(title = "Regions") + theme(plot.background = element_rect(fill = "white", color = NA), panel.background = element_rect(fill = "white", color = NA))
-ggsave("outputs/regions.png", width = 8, height = 8, bg = "white")
+region_data <- as.data.frame(table(tabla$Region)); colnames(region_data) <- c("Region", "Count"); region_data$Percentage <- round(region_data$Count / sum(region_data$Count) * 100, 1)
+
+ggplot(region_data, aes(x = "", y = Count, fill = paste0(Region, " (", Percentage, "%)"))) + geom_bar(stat = "identity", width = 1, color = "black", linewidth = 0.7) + coord_polar(theta = "y") + scale_fill_brewer(palette = "Set2") + theme_void() + labs(title = "Regions", fill = "Region") + theme(plot.background = element_rect(fill = "white", color = NA), panel.background = element_rect(fill = "white", color = NA))
+ggsave("outputs/regions.png", width = 9, height = 8, bg = "white")
 
 # =========================
 # Decimonoveno gráfico (ECONOMIC CLASSIFICATION)
@@ -164,3 +167,12 @@ ggsave("outputs/latin_american_country.png", width = 8, height = 5)
 
 ggplot(head(subset(as.data.frame(sort(table(tabla$Country), decreasing = TRUE)), Var1 != ""), 10), aes(y = reorder(Var1, Freq), x = Freq, fill = Var1)) + geom_bar(stat = "identity") + theme_minimal() + theme(legend.position = "none") + labs(title = "Top 10 Countries", x = "Count", y = "")
 ggsave("outputs/top_countries.png", width = 12, height = 7)
+
+# =========================
+# PAPERS PER YEAR
+# =========================
+
+ggplot(tabla, aes(x = factor(Year))) + geom_bar(fill = "#4E79A7", color = "black", linewidth = 0.3, width = 0.8) + scale_y_continuous(breaks = seq(0, 20, 5)) + theme_minimal() + labs(title = "Publications Over Time", x = "Year", y = "Number of Papers")
+ggsave("outputs/papers_per_year.png", width = 10, height = 6, bg = "white")
+
+
