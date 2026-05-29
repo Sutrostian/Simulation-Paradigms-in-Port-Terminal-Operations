@@ -164,23 +164,6 @@ ggsave("outputs/G05_terminal_type_by_year_final.png",
 # BLOQUE 3 — OPTIMIZACIÓN
 # =============================================================
 
-# ── G06: Integrates optimization? ───────────────────────────
-ggplot(tabla, aes(y = fct_infreq(`Integrates optimization?`),
-                  fill = `Integrates optimization?`)) +
-  geom_bar(color = "white", linewidth = 0.3) +
-  geom_text(stat  = "count",
-            aes(label = paste0(after_stat(count), " (",
-                               round(after_stat(count) / nrow(tabla) * 100, 1), "%)")),
-            hjust = -0.1, size = 3.5) +
-  scale_fill_manual(values = c("Yes" = "#1A9641", "No" = "#BDBDBD")) +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
-  theme_minimal(base_size = 12) +
-  theme(legend.position = "none",
-        panel.grid.major.y = element_blank()) +
-  labs(title = "Integrates optimization?", x = "Count", y = "")
-ggsave("outputs/G06_integrates_optimization_final.png",
-       width = 8, height = 4, bg = "white")
-
 # ── G07: Métodos de optimización (solo Yes, n=30) ────────────
 tabla_opt_yes <- tabla %>%
   filter(`Integrates optimization?` == "Yes",
@@ -205,21 +188,27 @@ tabla_opt_yes$`Opt method grouped` <- case_when(
   TRUE ~ tabla_opt_yes$`Optimization method`
 )
 
+# Calcular total para porcentajes
+n_total <- nrow(tabla_opt_yes)
+
 ggplot(tabla_opt_yes,
        aes(y = fct_infreq(`Opt method grouped`),
            fill = `Opt method grouped`)) +
   geom_bar(color = "white", linewidth = 0.3) +
   geom_text(stat  = "count",
-            aes(label = after_stat(count)),
-            hjust = -0.3, size = 3.5) +
+            aes(label = after_stat(
+              paste0(count, " (", round(count / n_total * 100, 1), "%)")
+            )),
+            hjust = -0.15, size = 3.5) +
   scale_fill_brewer(palette = "Dark2") +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.25))) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.30))) +
   theme_minimal(base_size = 12) +
   theme(legend.position = "none",
         panel.grid.major.y = element_blank()) +
   labs(title    = "Optimization methods used (studies with optimization, n=27)",
        subtitle = "Metaheuristic variants grouped; 'Not specified' excluded",
        x = "Count", y = "")
+
 ggsave("outputs/G07_optimization_methods_final.png",
        width = 12, height = 6, bg = "white")
 
@@ -1544,3 +1533,100 @@ ggsave("outputs/SW10_map_small_multiples_tools_final.png",
 # =============================================================
 message("✓ 10 gráficos/mapas de software generados (SW01–SW10)")
 message("✓ Guardados en outputs/ con sufijo _final")
+
+# =============================================================
+# MAPA — Top subprocess por región (coropleta)
+# Usa la misma lógica de agrupación del script principal
+# =============================================================
+
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+
+# ── 1. Clasificar subprocesos (explode de entradas múltiples) ─
+tabla_sub <- tabla %>%
+  mutate(subprocess_raw = strsplit(as.character(`Specific subprocess`), ",\\s*")) %>%
+  tidyr::unnest(subprocess_raw) %>%
+  filter(!is.na(subprocess_raw),
+         !trimws(subprocess_raw) %in% c("Not specified", ""))
+
+tabla_sub$subprocess_grouped <- dplyr::case_when(
+  grepl("AGV",                                          tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "AGV routing / dispatching",
+  grepl("quay crane|crane assign|crane sched",          tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Quay crane scheduling",
+  grepl("berth",                                        tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Berth allocation",
+  grepl("traffic|congestion|vehicle traffic",           tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Traffic management",
+  grepl("gate",                                         tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Gate operations",
+  grepl("truck dispatch|yard truck",                    tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Truck / yard dispatching",
+  grepl("stacking|retrieval|container stack|storage",   tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Stacking / storage",
+  grepl("yard plan|yard layout|yard oper|yard crane",   tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Yard planning / layout",
+  grepl("layout|process layout|design",                 tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Layout / design",
+  grepl("container routing",                            tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Container routing",
+  grepl("stowage",                                      tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Stowage planning",
+  grepl("capacity planning|terminal capacity",          tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Capacity planning",
+  grepl("intermodal",                                   tabla_sub$subprocess_raw, ignore.case = TRUE) ~ "Intermodal operations",
+  TRUE ~ NA_character_
+) 
+
+# ── 2. Subprocess dominante por región ───────────────────────
+# Subprocess dominante por región
+dominant_sub <- tabla_sub %>%
+  filter(!is.na(subprocess_grouped),
+         !is.na(Region), Region != "Not specified") %>%
+  count(Region, subprocess_grouped) %>%
+  group_by(Region) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(region_label = Region, dominant_subprocess = subprocess_grouped)
+
+# Subtítulo con n, % y nota de empate para Latin America
+sub_stats <- tabla_sub %>%
+  filter(!is.na(subprocess_grouped),
+         !is.na(Region), Region != "Not specified") %>%
+  count(Region, subprocess_grouped) %>%
+  group_by(Region) %>%
+  mutate(
+    pct       = round(n / sum(n) * 100, 1),
+    n_tied    = sum(n == max(n)),
+    total_sub = sum(n)
+  ) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+subtitle_text <- sub_stats %>%
+  arrange(desc(total_sub)) %>%
+  mutate(label = case_when(
+    n_tied > 1 & Region == "Latin America" ~ paste0(Region, " → ", subprocess_grouped,
+                                                    " (n=", n, "/", total_sub, ", ", pct,
+                                                    "% — tied with Stacking / storage)"),
+    n_tied > 1 ~ paste0(Region, " → ", subprocess_grouped,
+                        " (n=", n, "/", total_sub, ", ", pct,
+                        "% — tied)"),
+    TRUE       ~ paste0(Region, " → ", subprocess_grouped,
+                        " (n=", n, "/", total_sub, ", ", pct, "%)")
+  )) %>%
+  pull(label) %>%
+  paste(collapse = " | ")
+
+map_sub <- world %>% left_join(dominant_sub, by = "region_label")
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map_sub %>% filter(!is.na(dominant_subprocess)),
+          aes(fill = dominant_subprocess), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values       = sub_colors,
+    name         = "Dominant subprocess",
+    na.translate = FALSE
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  tema_mapa +
+  labs(
+    title    = "Dominant specific subprocess by region",
+    subtitle = stringr::str_wrap(subtitle_text, width = 130)
+  )
+
+ggsave("outputs/MAPA_SUB_dominant_subprocess_by_region_final.png",
+       width = 12, height = 7, bg = "white")
