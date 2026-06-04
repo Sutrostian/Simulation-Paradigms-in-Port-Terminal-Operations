@@ -3,7 +3,7 @@
 # Systematic Literature Review — Visualizaciones completas
 # n = 87 estudios incluidos (excluye Mathematical Analytical)
 # =============================================================
-
+setwd("C:/Users/sebas/OneDrive/Escritorio/Simulation Paradigms in Port Terminal Operations")
 # ── Paquetes ──────────────────────────────────────────────────
 library(readxl)
 library(ggplot2)
@@ -16,6 +16,7 @@ library(sf)
 library(rnaturalearth)
 library(rnaturalearthdata)
 library(countrycode)
+library(forcats)
 
 # ── Carga y filtrado base ─────────────────────────────────────
 tabla <- read_excel("data/data.xlsx",
@@ -1630,3 +1631,2193 @@ ggplot() +
 
 ggsave("outputs/MAPA_SUB_dominant_subprocess_by_region_final.png",
        width = 12, height = 7, bg = "white")
+
+# =============================================================
+# VALIDATION METHOD — Top 10 + evolución temporal + mapa
+# =============================================================
+
+# ── 1. Explotar entradas múltiples y agrupar ─────────────────
+tabla_val <- tabla %>%
+  filter(`Validated?` == "Yes",
+         !is.na(`Validation method`),
+         `Validation method` != "Not specified") %>%
+  mutate(val_raw = strsplit(as.character(`Validation method`), ",\\s*")) %>%
+  tidyr::unnest(val_raw) %>%
+  mutate(val_raw = trimws(val_raw)) %>%
+  mutate(val_grouped = case_when(
+    grepl("historical data|real data|empirical data|observed data|real system",
+          val_raw, ignore.case = TRUE)                        ~ "Historical / real data",
+    grepl("statistical test|statistical anal|robustness",
+          val_raw, ignore.case = TRUE)                        ~ "Statistical tests",
+    grepl("expert judgment|expert judge|operations team|operators",
+          val_raw, ignore.case = TRUE)                        ~ "Expert judgment",
+    grepl("literature comparison",
+          val_raw, ignore.case = TRUE)                        ~ "Literature comparison",
+    grepl("model comparison|comparison with simulation|mathematical comparison",
+          val_raw, ignore.case = TRUE)                        ~ "Model / simulation comparison",
+    grepl("calibration",
+          val_raw, ignore.case = TRUE)                        ~ "Calibration",
+    grepl("animation",
+          val_raw, ignore.case = TRUE)                        ~ "Animation",
+    grepl("theoretical formulas",
+          val_raw, ignore.case = TRUE)                        ~ "Theoretical formulas",
+    grepl("replications",
+          val_raw, ignore.case = TRUE)                        ~ "Statistical tests",
+    TRUE ~ "Other"
+  )) %>%
+  filter(val_grouped != "Other")
+
+# ── 2. Top 10 global (barras horizontales) ───────────────────
+n_val_total <- nrow(tabla_val)
+
+val_global <- tabla_val %>%
+  count(val_grouped, sort = TRUE) %>%
+  mutate(
+    pct       = round(n / n_val_total * 100, 1),
+    val_grouped = fct_reorder(val_grouped, n)
+  )
+
+ggplot(val_global, aes(y = val_grouped, x = n, fill = val_grouped)) +
+  geom_bar(stat = "identity", color = "white", linewidth = 0.3) +
+  geom_text(aes(label = paste0(n, " (", pct, "%)")),
+            hjust = -0.1, size = 3.5) +
+  scale_fill_brewer(palette = "Dark2") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.25))) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position    = "none",
+        panel.grid.major.y = element_blank()) +
+  labs(
+    title    = "Validation methods used (studies with validation, n=Yes only)",
+    subtitle = "Multi-method entries exploded; grouped by category",
+    x = "Count", y = ""
+  )
+
+ggsave("outputs/VAL01_validation_methods_global_final.png",
+       width = 10, height = 5, bg = "white")
+
+# ── 3. Evolución temporal (apilado) ──────────────────────────
+val_year <- tabla_val %>%
+  count(Year, val_grouped) %>%
+  group_by(Year) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+ggplot(val_year,
+       aes(x = factor(Year), y = n, fill = val_grouped)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(n > 0,
+                               paste0(val_grouped, "\n(", pct, "%)"),
+                               "")),
+            position = position_stack(vjust = 0.5),
+            size = 2.4, color = "white", fontface = "bold") +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x   = element_text(angle = 45, hjust = 1),
+        legend.position = "right") +
+  labs(
+    title    = "Validation methods over time",
+    subtitle = "Historical / real data consistently dominant; statistical tests emerging post-2018",
+    x = "Year", y = "Number of papers", fill = "Validation method"
+  )
+
+ggsave("outputs/VAL02_validation_methods_by_year_final.png",
+       width = 12, height = 6, bg = "white")
+
+# ── 4. Mapa — método dominante por región ────────────────────
+dominant_val <- tabla_val %>%
+  filter(!is.na(Region), Region != "Not specified") %>%
+  count(Region, val_grouped) %>%
+  group_by(Region) %>%
+  mutate(
+    pct       = round(n / sum(n) * 100, 1),
+    n_tied    = sum(n == max(n)),
+    total_val = sum(n)
+  ) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+val_subtitle <- dominant_val %>%
+  arrange(desc(total_val)) %>%
+  mutate(label = paste0(Region, " → ", val_grouped,
+                        " (n=", n, "/", total_val, ", ", pct, "%",
+                        ifelse(n_tied > 1, " — tied)", ")"))) %>%
+  pull(label) %>%
+  paste(collapse = " | ")
+
+dominant_val_join <- dominant_val %>%
+  rename(region_label = Region, dominant_val = val_grouped)
+
+map_val <- world %>% left_join(dominant_val_join, by = "region_label")
+
+val_colors <- c(
+  "Historical / real data"       = "#2C7BB6",
+  "Statistical tests"            = "#D7191C",
+  "Expert judgment"              = "#1A9641",
+  "Literature comparison"        = "#F4A442",
+  "Model / simulation comparison"= "#8E44AD",
+  "Calibration"                  = "#E67E22",
+  "Animation"                    = "#16A085",
+  "Theoretical formulas"         = "#7F8C8D"
+)
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map_val %>% filter(!is.na(dominant_val)),
+          aes(fill = dominant_val), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values       = val_colors,
+    name         = "Dominant validation method",
+    na.translate = FALSE
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  tema_mapa +
+  labs(
+    title    = "Dominant validation method by region",
+    subtitle = stringr::str_wrap(val_subtitle, width = 130)
+  )
+
+ggsave("outputs/VAL03_validation_method_by_region_map_final.png",
+       width = 12, height = 7, bg = "white")
+
+tabla %>%
+  filter(`Validated?` == "Partially",
+         !is.na(`Validation method`),
+         `Validation method` != "Not specified") %>%
+  count(`Validation method`, sort = TRUE)
+
+# =============================================================
+# VAL04 — Validation method × Validated? (Yes + Partially)
+# =============================================================
+
+tabla_val_status <- tabla %>%
+  filter(`Validated?` %in% c("Yes", "Partially"),
+         !is.na(`Validation method`),
+         `Validation method` != "Not specified") %>%
+  mutate(val_raw = strsplit(as.character(`Validation method`), ",\\s*")) %>%
+  tidyr::unnest(val_raw) %>%
+  mutate(val_raw = trimws(val_raw)) %>%
+  mutate(val_grouped = case_when(
+    grepl("historical data|real data|empirical data|observed data|real system",
+          val_raw, ignore.case = TRUE)                         ~ "Historical / real data",
+    grepl("statistical test|statistical anal|robustness|replications",
+          val_raw, ignore.case = TRUE)                         ~ "Statistical tests",
+    grepl("expert judgment|expert judge|operations team|operators",
+          val_raw, ignore.case = TRUE)                         ~ "Expert judgment",
+    grepl("literature comparison",
+          val_raw, ignore.case = TRUE)                         ~ "Literature comparison",
+    grepl("model comparison|comparison with simulation|mathematical comparison",
+          val_raw, ignore.case = TRUE)                         ~ "Model / simulation comparison",
+    grepl("calibration",
+          val_raw, ignore.case = TRUE)                         ~ "Calibration",
+    grepl("animation",
+          val_raw, ignore.case = TRUE)                         ~ "Animation",
+    grepl("theoretical formulas",
+          val_raw, ignore.case = TRUE)                         ~ "Theoretical formulas",
+    TRUE ~ "Other"
+  )) %>%
+  filter(val_grouped != "Other")
+
+# Orden por total de apariciones
+order_val <- tabla_val_status %>%
+  count(val_grouped, sort = TRUE) %>%
+  pull(val_grouped)
+
+tabla_val_status <- tabla_val_status %>%
+  mutate(
+    val_grouped  = factor(val_grouped, levels = rev(order_val)),
+    `Validated?` = factor(`Validated?`, levels = c("Yes", "Partially"))
+  )
+
+# Calcular n y % por combinación
+val_status_count <- tabla_val_status %>%
+  count(val_grouped, `Validated?`) %>%
+  group_by(val_grouped) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  ungroup()
+
+ggplot(val_status_count,
+       aes(y = val_grouped, x = n, fill = `Validated?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(n > 0,
+                               paste0(n, " (", pct, "%)"),
+                               "")),
+            position = position_stack(vjust = 0.5),
+            size = 3.2, color = "white", fontface = "bold") +
+  scale_fill_manual(
+    values = c("Yes" = "#1A9641", "Partially" = "#ABD9E9"),
+    name   = "Validated?"
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position    = "right",
+        panel.grid.major.y = element_blank()) +
+  labs(
+    title    = "Validation method × validation status",
+    subtitle = paste0("Yes = ", sum(tabla$`Validated?` == "Yes"),
+                      " | Partially = ", sum(tabla$`Validated?` == "Partially"),
+                      " | multi-method entries exploded"),
+    x = "Count", y = ""
+  )
+
+ggsave("outputs/VAL04_validation_method_by_status_final.png",
+       width = 10, height = 5, bg = "white")
+
+# =============================================================
+# SW_MAP_EVOL — Tool dominante por región × período temporal
+# =============================================================
+
+# ── 1. Normalizar tools y crear períodos ─────────────────────
+top_tools <- c("Arena", "AnyLogic", "Custom code", "Plant Simulation", "FlexSim")
+
+tabla_tool_evol <- tabla %>%
+  filter(!is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "",
+         !is.na(Region), Region != "Not specified") %>%
+  mutate(
+    Tool = case_when(
+      grepl("Arena", `Tool / Software`, ignore.case = TRUE)  ~ "Arena",
+      grepl("AnyLogic", `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE)            ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      TRUE ~ "Other"
+    ),
+    Period = case_when(
+      Year <= 2017 ~ "2015–2017",
+      Year <= 2020 ~ "2018–2020",
+      Year <= 2022 ~ "2021–2022",
+      TRUE         ~ "2023–2025"
+    ),
+    Period = factor(Period, levels = c("2015–2017", "2018–2020",
+                                       "2021–2022", "2023–2025"))
+  ) %>%
+  filter(Tool != "Other")
+
+# ── 2. Tool dominante por región × período ───────────────────
+dominant_tool_evol <- tabla_tool_evol %>%
+  count(Period, Region, Tool) %>%
+  group_by(Period, Region) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(region_label = Region, dominant_tool = Tool)
+
+# ── 3. Join con world para cada período ──────────────────────
+map_tool_evol <- world %>%
+  cross_join(distinct(dominant_tool_evol, Period)) %>%
+  left_join(dominant_tool_evol, by = c("region_label", "Period"))
+
+tool_colors <- c(
+  "Arena"            = "#D7191C",
+  "AnyLogic"         = "#2C7BB6",
+  "Custom code"      = "#1A9641",
+  "Plant Simulation" = "#E67E22",
+  "FlexSim"          = "#8E44AD"
+)
+
+# ── 4. Mapa faceteado por período ────────────────────────────
+ggplot() +
+  geom_sf(data = map_tool_evol, fill = "#D0D3D4",
+          color = "white", linewidth = 0.2) +
+  geom_sf(data = map_tool_evol %>% filter(!is.na(dominant_tool)),
+          aes(fill = dominant_tool), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values       = tool_colors,
+    name         = "Dominant tool",
+    na.translate = FALSE
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  facet_wrap(~ Period, ncol = 2) +
+  tema_mapa +
+  theme(
+    strip.text      = element_text(face = "bold", size = 11),
+    legend.position = "bottom"
+  ) +
+  labs(
+    title    = "Dominant simulation tool by region — evolution over time",
+    subtitle = "Arena dominant 2015–2020 | AnyLogic rising from 2018 | Custom code stable in Europe"
+  )
+
+ggsave("outputs/SW_MAP_EVOL_tool_by_region_period_final.png",
+       width = 14, height = 9, bg = "white")
+
+# 1. Paradigma × objetivo del modelo
+tabla %>%
+  count(`Main paradigm`, `Model objective`, sort = TRUE) %>%
+  print(n = 30)
+
+# 2. Optimización × time horizon
+tabla %>%
+  count(`Integrates optimization?`, `Time horizon`, sort = TRUE) %>%
+  print(n = 20)
+
+# 3. Validated? × Real terminal?
+tabla %>%
+  count(`Validated?`, `Real terminal?`, sort = TRUE) %>%
+  print(n = 20)
+
+# 4. Economic classification
+tabla %>%
+  count(`Economic classification`, sort = TRUE)
+
+# =============================================================
+# CRUCE 1 — Heatmap: Main paradigm × Model objective
+# =============================================================
+heat_par_obj <- tabla %>%
+  filter(!is.na(`Main paradigm`), !is.na(`Model objective`)) %>%
+  count(`Main paradigm`, `Model objective`) %>%
+  tidyr::complete(`Main paradigm`, `Model objective`, fill = list(n = 0))
+
+heat_par_obj$`Model objective` <- recode(
+  heat_par_obj$`Model objective`,
+  "Sustainability + Performance evaluation" = "Sust. + Perf. eval.",
+  "Sustainability + Capacity planning"      = "Sust. + Cap. plan.",
+  "Education and training"                  = "Education / training",
+  "Performance evaluation"                  = "Performance eval."
+)
+
+ggplot(heat_par_obj,
+       aes(x = `Main paradigm`, y = `Model objective`, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(aes(label = ifelse(n > 0, n, "–")), size = 4) +
+  scale_fill_gradient(low = "#EBF5FB", high = "#1A5276", name = "Count") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1)) +
+  labs(
+    title    = "Heatmap: simulation paradigm × model objective",
+    subtitle = "DES dominates all objectives | ABM strong in Multiple + Performance eval.",
+    x = "", y = ""
+  )
+
+ggsave("outputs/CRUCE01_heatmap_paradigm_objective_final.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# CRUCE 2 — Optimización × Time horizon (% apilado)
+# =============================================================
+opt_th <- tabla %>%
+  filter(!is.na(`Integrates optimization?`),
+         !is.na(`Time horizon`),
+         `Time horizon` != "Not specified") %>%
+  count(`Time horizon`, `Integrates optimization?`) %>%
+  group_by(`Time horizon`) %>%
+  mutate(
+    pct          = round(n / sum(n) * 100, 1),
+    total        = sum(n),
+    `Time horizon` = paste0(`Time horizon`, "\n(n=", total, ")")
+  ) %>%
+  ungroup()
+
+ggplot(opt_th,
+       aes(x = reorder(`Time horizon`, -total),
+           y = pct, fill = `Integrates optimization?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(pct >= 8,
+                               paste0(pct, "%"), "")),
+            position = position_stack(vjust = 0.5),
+            size = 3.2, color = "white", fontface = "bold") +
+  scale_fill_manual(
+    values = c("Yes" = "#2C7BB6", "No" = "#BDBDBD"),
+    name   = "Integrates optimization?"
+  ) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x      = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank()) +
+  labs(
+    title    = "Optimization integration by time horizon",
+    subtitle = "Operational models optimize most (50%) | Strategic rarely integrates optimization (18%)",
+    x = "", y = "Percentage (%)"
+  )
+
+ggsave("outputs/CRUCE02_optimization_by_timehorizon_final.png",
+       width = 10, height = 5, bg = "white")
+
+# =============================================================
+# CRUCE 3 — Validated? × Real terminal? (heatmap con %)
+# =============================================================
+val_real <- tabla %>%
+  filter(!is.na(`Validated?`), !is.na(`Real terminal?`)) %>%
+  count(`Real terminal?`, `Validated?`) %>%
+  group_by(`Real terminal?`) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  ungroup() %>%
+  mutate(
+    `Validated?`     = factor(`Validated?`,
+                              levels = c("Yes", "Partially",
+                                         "No", "Not specified")),
+    `Real terminal?` = factor(`Real terminal?`,
+                              levels = c("Yes", "Partial", "No"))
+  )
+
+ggplot(val_real,
+       aes(x = `Validated?`, y = `Real terminal?`, fill = pct)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = paste0(n, "\n(", pct, "%)")), size = 3.8) +
+  scale_fill_gradient(low = "#EAFAF1", high = "#1E8449",
+                      name = "% of row") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank()) +
+  labs(
+    title    = "Validation status × real terminal basis",
+    subtitle = "Models on real terminals validate more (Yes 48%) | Generic terminals rarely validate (No 67%)",
+    x = "Validated?", y = "Real terminal?"
+  )
+
+ggsave("outputs/CRUCE03_validated_by_real_terminal_final.png",
+       width = 8, height = 5, bg = "white")
+
+# =============================================================
+# CRUCE 4 — Economic classification × variables clave
+# =============================================================
+econ_vars <- tabla %>%
+  filter(`Economic classification` != "Not specified",
+         !is.na(`Economic classification`)) %>%
+  group_by(`Economic classification`) %>%
+  summarise(
+    n_total      = n(),
+    pct_opt      = round(mean(`Integrates optimization?` == "Yes") * 100, 1),
+    pct_val      = round(mean(`Validated?` == "Yes") * 100, 1),
+    pct_sust     = round(mean(`Considers sustainability?` == "Yes") * 100, 1),
+    pct_sens     = round(mean(`Sensitivity analysis?` == "Yes") * 100, 1),
+    pct_real     = round(mean(`Real terminal?` == "Yes") * 100, 1)
+  ) %>%
+  tidyr::pivot_longer(
+    cols      = starts_with("pct_"),
+    names_to  = "variable",
+    values_to = "pct"
+  ) %>%
+  mutate(variable = recode(variable,
+                           "pct_opt"  = "Optimization",
+                           "pct_val"  = "Validated (Yes)",
+                           "pct_sust" = "Sustainability",
+                           "pct_sens" = "Sensitivity analysis",
+                           "pct_real" = "Real terminal (Yes)"
+  ))
+
+ggplot(econ_vars,
+       aes(x = variable, y = pct,
+           fill = `Economic classification`,
+           group = `Economic classification`)) +
+  geom_bar(stat = "identity", position = "dodge",
+           color = "white", linewidth = 0.3, width = 0.7) +
+  geom_text(aes(label = paste0(pct, "%")),
+            position = position_dodge(width = 0.7),
+            vjust = -0.4, size = 3.2) +
+  scale_fill_manual(
+    values = c("Developed"  = "#2C7BB6",
+               "Developing" = "#D7191C"),
+    name = "Economic classification"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)),
+                     labels = function(x) paste0(x, "%")) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x      = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank()) +
+  labs(
+    title    = "Developed vs developing countries — methodological comparison",
+    subtitle = paste0("Developed n=44 | Developing n=36 | Not specified excluded (n=7)"),
+    x = "", y = "Percentage (%)"
+  )
+
+ggsave("outputs/CRUCE04_developed_vs_developing_final.png",
+       width = 10, height = 5, bg = "white")
+
+# =============================================================
+# MAPA 1 — Tool dominante por país (mapa coropleta)
+# =============================================================
+top_tools <- c("Arena", "AnyLogic", "Custom code", "Plant Simulation", "FlexSim")
+
+tool_colors <- c(
+  "Arena"            = "#D7191C",
+  "AnyLogic"         = "#2C7BB6",
+  "Custom code"      = "#1A9641",
+  "Plant Simulation" = "#E67E22",
+  "FlexSim"          = "#8E44AD",
+  "Other"            = "#BDBDBD"
+)
+
+tool_dominant_country <- tabla %>%
+  filter(!is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "",
+         !is.na(Country), Country != "Not specified", Country != "") %>%
+  mutate(
+    Tool = case_when(
+      grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+      grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE) ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      TRUE ~ "Other"
+    ),
+    Country = recode(Country,
+                     "USA"       = "United States",
+                     "Hong Kong" = "China")
+  ) %>%
+  group_by(Country) %>%
+  summarise(
+    n_tool        = n(),
+    dominant_tool = Tool[which.max(tabulate(match(Tool, unique(Tool))))]
+  ) %>%
+  mutate(
+    dominant_tool_plot = ifelse(dominant_tool %in% top_tools,
+                                dominant_tool, "Other")
+  )
+
+tool_dominant_country$iso_a3 <- countrycode(
+  tool_dominant_country$Country, "country.name", "iso3c", warn = FALSE)
+
+map_tool_dominant <- world %>%
+  left_join(tool_dominant_country, by = "iso_a3")
+
+tool_colors_map <- c(tool_colors, "Other" = "#BDBDBD")
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map_tool_dominant %>% filter(!is.na(dominant_tool_plot)),
+          aes(fill = dominant_tool_plot), color = "white", linewidth = 0.2) +
+  scale_fill_manual(values   = tool_colors_map,
+                    name     = "Dominant tool",
+                    na.value = "#D0D3D4") +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  tema_mapa +
+  labs(
+    title    = "Dominant simulation tool by country",
+    subtitle = "China → AnyLogic | Italy, UK, South Korea → Arena | Netherlands → Custom code\nGrey = no tool specified or no papers"
+  )
+
+ggsave("outputs/SW06_map_dominant_tool_country_final.png",
+       width = 12, height = 7, bg = "white")
+
+# =============================================================
+# MAPA — Tool dominante por región (coropleta)
+# =============================================================
+tool_dominant_region <- tabla %>%
+  filter(!is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "",
+         !is.na(Region), Region != "Not specified") %>%
+  mutate(
+    Tool = case_when(
+      grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+      grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE) ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(Tool != "Other") %>%
+  group_by(Region) %>%
+  mutate(
+    total_region  = n(),
+    n_tied        = sum(Tool == names(which.max(table(Tool))))
+  ) %>%
+  count(Region, Tool, total_region, n_tied) %>%
+  group_by(Region) %>%
+  mutate(pct = round(n / total_region * 100, 1)) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Calcular empates detallados
+tool_dominant_region <- tabla %>%
+  filter(!is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "",
+         !is.na(Region), Region != "Not specified") %>%
+  mutate(
+    Tool = case_when(
+      grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+      grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE) ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(Tool != "Other") %>%
+  count(Region, Tool) %>%
+  group_by(Region) %>%
+  mutate(
+    total_region = sum(n),
+    pct          = round(n / total_region * 100, 1),
+    max_n        = max(n),
+    tied_tools   = paste(Tool[n == max_n], collapse = " & ")
+  ) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Subtítulo con empates especificados
+tool_region_subtitle <- tool_dominant_region %>%
+  arrange(desc(total_region)) %>%
+  mutate(label = case_when(
+    n == max_n & sapply(strsplit(tied_tools, " & "), length) > 1 ~
+      paste0(Region, " → ", Tool,
+             " (n=", n, "/", total_region, ", ", pct,
+             "% — tied with ", gsub(paste0(Tool, " & |& ", Tool), "", tied_tools), ")"),
+    TRUE ~
+      paste0(Region, " → ", Tool,
+             " (n=", n, "/", total_region, ", ", pct, "%)")
+  )) %>%
+  pull(label) %>%
+  paste(collapse = " | ")
+
+dominant_tool_region_join <- tool_dominant_region %>%
+  rename(region_label = Region, dominant_tool = Tool)
+
+map_tool_region <- world %>%
+  left_join(dominant_tool_region_join, by = "region_label")
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map_tool_region %>% filter(!is.na(dominant_tool)),
+          aes(fill = dominant_tool), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values       = tool_colors,
+    name         = "Dominant tool",
+    na.translate = FALSE
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  tema_mapa +
+  labs(
+    title    = "Dominant simulation tool by region",
+    subtitle = stringr::str_wrap(tool_region_subtitle, width = 130)
+  )
+
+ggsave("outputs/SW_MAP_tool_dominant_by_region_final.png",
+       width = 12, height = 7, bg = "white")
+
+#FINAL FINAL
+th_region <- tabla %>%
+  mutate(
+    Region = ifelse(is.na(Region), "Not specified", Region),
+    `Time horizon` = ifelse(is.na(`Time horizon`), "Not specified", `Time horizon`)
+  ) %>%
+  filter(Region != "Not specified") %>%
+  count(Region, `Time horizon`) %>%
+  group_by(Region) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+ggplot(th_region,
+       aes(x = reorder(Region, -n, sum),
+           y = n, fill = `Time horizon`)) +
+  geom_bar(stat = "identity", color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5), size = 2.8) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+  labs(title    = "Time horizon by region (frequency)",
+       subtitle = "Operational dominates Asia-Pacific; Strategic + Multiple dominate Europe",
+       x = "", y = "Number of papers", fill = "Time horizon")
+
+ggsave("outputs/Final/FinalFinal/G09_time_horizon_by_region_frequency.png",
+       width = 12, height = 6, bg = "white")
+## ANIMACION
+
+anim_year <- tabla %>%
+  count(Year, `Includes animation?`) %>%
+  group_by(Year) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+ggplot(anim_year,
+       aes(x = factor(Year), y = n, fill = `Includes animation?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(data = subset(anim_year, `Includes animation?` == "Yes" & n > 0),
+            aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 2.8, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes" = "#E67E22", "No" = "#BDBDBD")) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title    = "Includes animation? — evolution over time",
+       subtitle = paste0("Overall: ", sum(tabla$`Includes animation?` == "Yes"), " Yes"),
+       x = "Year", y = "Number of papers", fill = "Includes animation?")
+
+ggsave("outputs/Final/FinalFinal/G13_animation_by_year_frequency.png",
+       width = 11, height = 6, bg = "white")
+## POR PAIS
+
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+world <- world %>%
+  mutate(
+    continent_raw = countrycode(iso_a3, "iso3c", "continent"),
+    region_label  = case_when(
+      continent_raw == "Americas" &
+        subregion %in% c("South America", "Central America",
+                         "Caribbean")           ~ "Latin America",
+      continent_raw == "Americas"               ~ "North America",
+      continent_raw == "Asia" &
+        name %in% c("Iran", "Iraq", "Saudi Arabia",
+                    "United Arab Emirates", "Kuwait", "Qatar",
+                    "Bahrain", "Oman", "Yemen", "Jordan",
+                    "Lebanon", "Syria", "Israel", "Turkey") ~ "Middle East",
+      continent_raw == "Asia"                   ~ "Asia-Pacific",
+      continent_raw == "Oceania"                ~ "Asia-Pacific",
+      continent_raw == "Europe"                 ~ "Europe",
+      continent_raw == "Africa"                 ~ "Africa",
+      TRUE ~ continent_raw
+    )
+  )
+dominant_th_country <- tabla %>%
+  filter(!is.na(Country), Country != "Not specified", Country != "",
+         !is.na(`Time horizon`),
+         `Time horizon` != "Not specified") %>%
+  mutate(Country = recode(Country,
+                          "USA"       = "United States",
+                          "Hong Kong" = "China")) %>%
+  count(Country, `Time horizon`) %>%
+  group_by(Country) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+dominant_th_country$iso_a3 <- countrycode(
+  dominant_th_country$Country, "country.name", "iso3c", warn = FALSE)
+
+map20_country <- world %>% left_join(dominant_th_country, by = "iso_a3")
+
+th_colors_map <- c(
+  "Operational"            = "#D7191C",   # rojo
+  "Strategic"              = "#2C7BB6",   # azul
+  "Multiple"               = "#8E44AD",   # morado
+  "Operational + Tactical" = "#27AE60",   # verde
+  "Strategic + Tactical"   = "#E67E22",   # naranja
+  "Tactical"               = "#F1C40F"    # amarillo
+)
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map20_country %>% filter(!is.na(`Time horizon`)),
+          aes(fill = `Time horizon`), color = "white", linewidth = 0.2) +
+  scale_fill_manual(values   = th_colors_map,
+                    name     = "Dominant time horizon",
+                    na.value = "#EAECEE") +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid = element_blank(),
+        axis.text  = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "bottom") +
+  labs(title    = "Dominant time horizon by country",
+       subtitle = "Grey = countries with no papers or time horizon not specified")
+
+ggsave("outputs/Final/FinalFinal/G20_map_time_horizon_by_country_final.png",
+       width = 12, height = 7, bg = "white")
+
+#Intensidad 
+
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+library(dplyr)
+library(ggplot2)
+
+# ── Geometría mundial ─────────────────────────────────────────
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# ── Datos por país ────────────────────────────────────────────
+th_country <- tabla %>%
+  filter(!is.na(Country), Country != "Not specified", Country != "",
+         !is.na(`Time horizon`), `Time horizon` != "Not specified") %>%
+  mutate(Country = recode(Country, "USA" = "United States", "Hong Kong" = "China")) %>%
+  count(Country, `Time horizon`) %>%
+  group_by(Country) %>%
+  mutate(
+    total        = sum(n),
+    dominant_th  = `Time horizon`[which.max(n)]
+  ) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+th_country$iso_a3 <- countrycode(th_country$Country, "country.name", "iso3c", warn = FALSE)
+
+# ── Centroides ────────────────────────────────────────────────
+centroids <- world %>%
+  st_centroid() %>%
+  mutate(
+    lon = st_coordinates(.)[, 1],
+    lat = st_coordinates(.)[, 2]
+  ) %>%
+  st_drop_geometry() %>%
+  select(iso_a3, lon, lat)
+
+th_bubbles <- th_country %>%
+  left_join(centroids, by = "iso_a3") %>%
+  filter(!is.na(lon))
+
+# ── Paleta ────────────────────────────────────────────────────
+th_colors_map <- c(
+  "Operational"            = "#D7191C",
+  "Strategic"              = "#2C7BB6",
+  "Multiple"               = "#8E44AD",
+  "Operational + Tactical" = "#27AE60",
+  "Strategic + Tactical"   = "#E67E22",
+  "Tactical"               = "#F1C40F"
+)
+
+# ── Mapa ──────────────────────────────────────────────────────
+ggplot() +
+  geom_sf(data = world, fill = "#E8E8E8", color = "white", linewidth = 0.2) +
+  geom_point(data = th_bubbles,
+             aes(x = lon, y = lat,
+                 size  = total,
+                 color = dominant_th),
+             alpha = 0.85) +
+  scale_size_continuous(
+    range  = c(4, 16),
+    name   = "Number of papers",
+    breaks = c(1, 5, 10, 20)
+  ) +
+  scale_color_manual(
+    values = th_colors_map,
+    name   = "Dominant time horizon"
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  guides(
+    color = guide_legend(override.aes = list(size = 5)),
+    size  = guide_legend(override.aes = list(color = "grey40"))
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.text       = element_blank(),
+    axis.ticks      = element_blank(),
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title      = element_text(face = "bold", size = 13),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Dominant time horizon by country",
+    subtitle = "Bubble size = total papers per country | Color = dominant time horizon"
+  )
+
+ggsave("outputs/Final/FinalFinal/G20_map_time_horizon_bubbles_by_country.png",
+       width = 12, height = 7, bg = "white")
+
+#Incluyendo los no dominantes
+
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+library(dplyr)
+library(ggplot2)
+
+# ── Geometría mundial ─────────────────────────────────────────
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# ── Todos los pares país × time horizon ──────────────────────
+th_all <- tabla %>%
+  filter(!is.na(Country), Country != "Not specified", Country != "",
+         !is.na(`Time horizon`), `Time horizon` != "Not specified") %>%
+  mutate(Country = recode(Country, "USA" = "United States", "Hong Kong" = "China")) %>%
+  count(Country, `Time horizon`)
+
+th_all$iso_a3 <- countrycode(th_all$Country, "country.name", "iso3c", warn = FALSE)
+
+# ── Centroides ────────────────────────────────────────────────
+centroids <- world %>%
+  st_centroid() %>%
+  mutate(
+    lon = st_coordinates(.)[, 1],
+    lat = st_coordinates(.)[, 2]
+  ) %>%
+  st_drop_geometry() %>%
+  select(iso_a3, lon, lat)
+
+# ── Spread de burbujas alrededor del centroide ────────────────
+set.seed(42)
+
+th_bubbles_all <- th_all %>%
+  left_join(centroids, by = "iso_a3") %>%
+  filter(!is.na(lon)) %>%
+  group_by(Country) %>%
+  mutate(
+    n_th  = n(),
+    idx   = row_number(),
+    angle = (idx - 1) * (2 * pi / n_th),
+    radio = ifelse(n_th == 1, 0, 2.5),
+    lon   = lon + radio * cos(angle),
+    lat   = lat + radio * sin(angle)
+  ) %>%
+  ungroup()
+
+# ── Paleta ────────────────────────────────────────────────────
+th_colors_map <- c(
+  "Operational"            = "#D7191C",
+  "Strategic"              = "#2C7BB6",
+  "Multiple"               = "#8E44AD",
+  "Operational + Tactical" = "#27AE60",
+  "Strategic + Tactical"   = "#E67E22",
+  "Tactical"               = "#F1C40F"
+)
+
+# ── Mapa ──────────────────────────────────────────────────────
+ggplot() +
+  geom_sf(data = world, fill = "#E8E8E8", color = "white", linewidth = 0.2) +
+  geom_point(data = th_bubbles_all %>% arrange(n),
+             aes(x = lon, y = lat,
+                 size  = n,
+                 color = `Time horizon`),
+             alpha = 0.85) +
+  scale_size_continuous(
+    range  = c(3, 14),
+    name   = "Number of papers",
+    breaks = c(1, 3, 6, 11)
+  ) +
+  scale_color_manual(
+    values = th_colors_map,
+    name   = "Time horizon"
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  guides(
+    color = guide_legend(override.aes = list(size = 5)),
+    size  = guide_legend(override.aes = list(color = "grey40"))
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.text       = element_blank(),
+    axis.ticks      = element_blank(),
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title      = element_text(face = "bold", size = 13),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Time horizon distribution by country",
+    subtitle = "Each bubble = one time horizon | Size = number of papers | Bubbles spread around country centroid"
+  )
+
+ggsave("outputs/Final/FinalFinal/G20_map_time_horizon_spread_bubbles.png",
+       width = 13, height = 7, bg = "white")
+
+#sustain burbujas 
+
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+library(dplyr)
+library(ggplot2)
+
+# ── Geometría mundial ─────────────────────────────────────────
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# ── % sustainability Yes por país (todos los países) ──────────
+sust_country <- tabla %>%
+  filter(!is.na(Country), Country != "Not specified", Country != "",
+         !is.na(`Considers sustainability?`)) %>%
+  mutate(Country = recode(Country, "USA" = "United States", "Hong Kong" = "China")) %>%
+  group_by(Country) %>%
+  summarise(
+    n_total = n(),
+    pct_yes = round(mean(`Considers sustainability?` == "Yes") * 100, 1)
+  )
+
+sust_country$iso_a3 <- countrycode(sust_country$Country, "country.name", "iso3c", warn = FALSE)
+
+# ── Centroides ────────────────────────────────────────────────
+centroids <- world %>%
+  st_centroid() %>%
+  mutate(
+    lon = st_coordinates(.)[, 1],
+    lat = st_coordinates(.)[, 2]
+  ) %>%
+  st_drop_geometry() %>%
+  select(iso_a3, lon, lat)
+
+sust_bubbles <- sust_country %>%
+  left_join(centroids, by = "iso_a3") %>%
+  filter(!is.na(lon))
+
+# ── Mapa ──────────────────────────────────────────────────────
+ggplot() +
+  geom_sf(data = world, fill = "#E8E8E8", color = "white", linewidth = 0.2) +
+  geom_point(data = sust_bubbles %>% arrange(n_total),
+             aes(x = lon, y = lat,
+                 size  = n_total,
+                 color = pct_yes),
+             alpha = 0.85) +
+  scale_color_gradient(low  = "#D5F5E3", high = "#1E8449",
+                       name = "% sustainability Yes",
+                       limits = c(0, 100),
+                       labels = function(x) paste0(x, "%")) +
+  scale_size_continuous(
+    range  = c(3, 14),
+    name   = "Number of papers",
+    breaks = c(1, 5, 10, 21)
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  guides(
+    color = guide_colorbar(barwidth = 8, barheight = 0.8),
+    size  = guide_legend(override.aes = list(color = "grey40"))
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid       = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    legend.position  = "bottom",
+    legend.box       = "horizontal",
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Considers sustainability? — % Yes by country",
+    subtitle = "Bubble size = total papers | Color intensity = % of papers considering sustainability\nSmall bubbles = fewer papers (interpret with caution)"
+  )
+
+ggsave("outputs/Final/FinalFinal/G21_map_sustainability_bubbles_by_country.png",
+       width = 13, height = 7, bg = "white")
+
+
+
+#blabla
+
+sust_region <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Considers sustainability?`)) %>%
+  count(Region, `Considers sustainability?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(sust_region,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Considers sustainability?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(
+    values = c("Yes" = "#1E8449", "No" = "#BDBDBD"),
+    name   = "Considers sustainability?"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x      = element_text(angle = 30, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Considers sustainability? by region",
+    subtitle = paste0("Total: ", nrow(tabla), " studies | Ordered by total papers per region"),
+    x = "", y = "Number of papers"
+  )
+
+ggsave("outputs/Final/FinalFinal/G21_sustainability_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+##asdssad
+anim_region <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Includes animation?`)) %>%
+  count(Region, `Includes animation?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(anim_region,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Includes animation?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(
+    values = c("Yes" = "#E67E22", "No" = "#BDBDBD"),
+    name   = "Includes animation?"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x        = element_text(angle = 30, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    plot.title         = element_text(face = "bold", size = 13),
+    plot.subtitle      = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Includes animation? by region",
+    subtitle = paste0("Total: ", sum(anim_region$n), " studies | Ordered by total papers per region"),
+    x = "", y = "Number of papers"
+  )
+
+ggsave("outputs/Final/FinalFinal/G13_animation_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA A — Integrates optimization? por región
+# =============================================================
+opt_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Integrates optimization?`)) %>%
+  count(Region, `Integrates optimization?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(opt_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Integrates optimization?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes" = "#B7950B", "No" = "#BDBDBD"),
+                    name   = "Integrates optimization?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Integrates optimization? by region",
+       subtitle = "Asia-Pacific 51% vs Europe 18% — notable methodological gap",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_A_optimization_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA B — Sensitivity analysis? por región
+# =============================================================
+sens_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Sensitivity analysis?`)) %>%
+  count(Region, `Sensitivity analysis?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(sens_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Sensitivity analysis?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes" = "#1A5276", "No" = "#BDBDBD"),
+                    name   = "Sensitivity analysis?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Sensitivity analysis? by region",
+       subtitle = "Germany 67% | Netherlands, UK → 0%",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_B_sensitivity_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA C — Validated? por región (Yes / Partially / No)
+# =============================================================
+val_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Validated?`)) %>%
+  count(Region, `Validated?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  mutate(`Validated?` = factor(`Validated?`,
+                               levels = c("Yes", "Partially", "No", "Not specified")))
+
+ggplot(val_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Validated?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes"           = "#1E8449",
+                               "Partially"     = "#ABD9E9",
+                               "No"            = "#D7191C",
+                               "Not specified" = "#BDBDBD"),
+                    name   = "Validated?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Model validation by region",
+       subtitle = "France 50% | Germany 67% | Netherlands 0%",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_C_validation_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA D — Includes animation? por región
+# =============================================================
+anim_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Includes animation?`)) %>%
+  count(Region, `Includes animation?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(anim_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Includes animation?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes" = "#E67E22", "No" = "#BDBDBD"),
+                    name   = "Includes animation?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Includes animation? by region",
+       subtitle = "Italy 50% | Turkey 50% | Sweden 33% | UK, Netherlands, Germany → 0%",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_D_animation_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA E — Considers sustainability? por región
+# =============================================================
+sust_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Considers sustainability?`)) %>%
+  count(Region, `Considers sustainability?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+ggplot(sust_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Considers sustainability?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes" = "#1E8449", "No" = "#BDBDBD"),
+                    name   = "Considers sustainability?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Considers sustainability? by region",
+       subtitle = "Indonesia 80% | Netherlands 62% | France, India, Sweden, Turkey → 0%",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_E_sustainability_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA H — Real terminal? por región (Yes / Partial / No)
+# =============================================================
+real_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Real terminal?`)) %>%
+  count(Region, `Real terminal?`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  mutate(`Real terminal?` = factor(`Real terminal?`,
+                                   levels = c("Yes", "Partial", "No")))
+
+ggplot(real_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Real terminal?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes"     = "#1A5276",
+                               "Partial" = "#ABD9E9",
+                               "No"      = "#D7191C"),
+                    name   = "Real terminal?") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Real terminal basis by region",
+       subtitle = "France, Malaysia, Poland, Sweden → 100% | Indonesia, South Korea → lower real terminal use",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_H_real_terminal_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+# =============================================================
+# MAPA K — Model objective por región (dominante → barras)
+# =============================================================
+obj_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Model objective`)) %>%
+  count(Region, `Model objective`) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+obj_colors <- c(
+  "Multiple"                                = "#8E44AD",
+  "Optimization"                            = "#B7950B",
+  "Performance evaluation"                  = "#2C7BB6",
+  "Sustainability"                          = "#1A9641",
+  "Capacity planning"                       = "#D7191C",
+  "Sustainability + Performance evaluation" = "#1F618D",
+  "Education and training"                  = "#E67E22",
+  "Scenario analysis"                       = "#95A5A6",
+  "Sustainability + Capacity planning"      = "#148F77"
+)
+
+ggplot(obj_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = `Model objective`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.2, color = "white", fontface = "bold") +
+  scale_fill_manual(values = obj_colors,
+                    name   = "Model objective") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Model objective by region",
+       subtitle = "Asia-Pacific → Optimization | Europe → Multiple | Latin America → Performance eval.",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/MAPA_K_model_objective_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+#toools
+tool_region_bar <- tabla %>%
+  filter(!is.na(Region), Region != "Not specified",
+         !is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "") %>%
+  mutate(Tool = case_when(
+    grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+    grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+    grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+          `Tool / Software`, ignore.case = TRUE)                     ~ "Custom code",
+    grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+    grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+    TRUE ~ "Other"
+  )) %>%
+  count(Region, Tool) %>%
+  group_by(Region) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+tool_colors <- c(
+  "Arena"            = "#D7191C",
+  "AnyLogic"         = "#2C7BB6",
+  "Custom code"      = "#1A9641",
+  "Plant Simulation" = "#E67E22",
+  "FlexSim"          = "#8E44AD",
+  "Other"            = "#95A5A6"
+)
+
+ggplot(tool_region_bar,
+       aes(x = reorder(Region, -total),
+           y = n, fill = Tool)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(values = tool_colors, name = "Tool / Software") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x        = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title         = element_text(face = "bold", size = 13),
+        plot.subtitle      = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Simulation tool by region",
+       subtitle = "Only papers with tool specified | North America excluded: 1 paper with tool not specified",
+       x = "", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/SW_tool_by_region_stacked.png",
+       width = 10, height = 6, bg = "white")
+
+#aaaa
+econ_vars <- tabla %>%
+  filter(`Economic classification` != "Not specified",
+         !is.na(`Economic classification`)) %>%
+  group_by(`Economic classification`) %>%
+  summarise(
+    n_total      = n(),
+    Optimization        = sum(`Integrates optimization?` == "Yes"),
+    `Real terminal (Yes)` = sum(`Real terminal?` == "Yes"),
+    `Sensitivity analysis` = sum(`Sensitivity analysis?` == "Yes"),
+    Sustainability      = sum(`Considers sustainability?` == "Yes"),
+    `Validated (Yes)`   = sum(`Validated?` == "Yes")
+  ) %>%
+  tidyr::pivot_longer(
+    cols      = c(Optimization, `Real terminal (Yes)`,
+                  `Sensitivity analysis`, Sustainability, `Validated (Yes)`),
+    names_to  = "variable",
+    values_to = "n"
+  )
+
+ggplot(econ_vars,
+       aes(x = variable, y = n,
+           fill = `Economic classification`,
+           group = `Economic classification`)) +
+  geom_bar(stat = "identity", position = "dodge",
+           color = "white", linewidth = 0.3, width = 0.7) +
+  geom_text(aes(label = n),
+            position = position_dodge(width = 0.7),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(
+    values = c("Developed"  = "#2C7BB6",
+               "Developing" = "#D7191C"),
+    name = "Economic classification"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x        = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title         = element_text(face = "bold", size = 13),
+        plot.subtitle      = element_text(size = 10, color = "grey40")) +
+  labs(
+    title    = "Developed vs developing countries — methodological comparison",
+    subtitle = paste0("Developed n=", sum(tabla$`Economic classification` == "Developed", na.rm = TRUE),
+                      " | Developing n=", sum(tabla$`Economic classification` == "Developing", na.rm = TRUE),
+                      " | Not specified excluded (n=",
+                      sum(tabla$`Economic classification` == "Not specified", na.rm = TRUE), ")"),
+    x = "", y = "Number of papers"
+  )
+
+ggsave("outputs/Final/FinalFinal/CRUCE04_developed_vs_developing_n.png",
+       width = 10, height = 5, bg = "white")
+
+#aaaaaaa
+opt_th <- tabla %>%
+  filter(!is.na(`Integrates optimization?`),
+         !is.na(`Time horizon`),
+         `Time horizon` != "Not specified") %>%
+  count(`Time horizon`, `Integrates optimization?`) %>%
+  group_by(`Time horizon`) %>%
+  mutate(
+    total        = sum(n),
+    `Time horizon` = paste0(`Time horizon`, "\n(n=", total, ")")
+  ) %>%
+  ungroup()
+
+ggplot(opt_th,
+       aes(x = reorder(`Time horizon`, -total),
+           y = n, fill = `Integrates optimization?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, color = "white", fontface = "bold") +
+  scale_fill_manual(
+    values = c("Yes" = "#2C7BB6", "No" = "#BDBDBD"),
+    name   = "Integrates optimization?"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x        = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        plot.title         = element_text(face = "bold", size = 13),
+        plot.subtitle      = element_text(size = 10, color = "grey40")) +
+  labs(
+    title    = "Optimization integration by time horizon",
+    subtitle = "Operational models optimize most | Strategic rarely integrates optimization",
+    x = "", y = "Number of papers"
+  )
+
+ggsave("outputs/Final/FinalFinal/CRUCE02_optimization_by_timehorizon_n.png",
+       width = 10, height = 5, bg = "white")
+
+#evolution
+
+top_tools <- c("Arena", "AnyLogic", "Custom code", "Plant Simulation", "FlexSim")
+
+tool_colors <- c(
+  "Arena"            = "#D7191C",
+  "AnyLogic"         = "#2C7BB6",
+  "Custom code"      = "#1A9641",
+  "Plant Simulation" = "#E67E22",
+  "FlexSim"          = "#8E44AD"
+)
+
+tabla_tool_evol_country <- tabla %>%
+  filter(!is.na(`Tool / Software`),
+         `Tool / Software` != "Not specified",
+         `Tool / Software` != "",
+         !is.na(Country), Country != "Not specified", Country != "") %>%
+  mutate(
+    Tool = case_when(
+      grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+      grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE)                     ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      TRUE ~ "Other"
+    ),
+    Period = case_when(
+      Year <= 2017 ~ "2015–2017",
+      Year <= 2020 ~ "2018–2020",
+      Year <= 2022 ~ "2021–2022",
+      TRUE         ~ "2023–2025"
+    ),
+    Period  = factor(Period, levels = c("2015–2017", "2018–2020", "2021–2022", "2023–2025")),
+    Country = recode(Country, "USA" = "United States", "Hong Kong" = "China")
+  ) %>%
+  filter(Tool != "Other") %>%
+  count(Period, Country, Tool) %>%
+  group_by(Period, Country) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(dominant_tool = Tool)
+
+tabla_tool_evol_country$iso_a3 <- countrycode(
+  tabla_tool_evol_country$Country, "country.name", "iso3c", warn = FALSE)
+
+map_tool_evol_country <- world %>%
+  cross_join(distinct(tabla_tool_evol_country, Period)) %>%
+  left_join(tabla_tool_evol_country, by = c("iso_a3", "Period"))
+
+ggplot() +
+  geom_sf(data = map_tool_evol_country, fill = "#D0D3D4",
+          color = "white", linewidth = 0.2) +
+  geom_sf(data = map_tool_evol_country %>% filter(!is.na(dominant_tool)),
+          aes(fill = dominant_tool), color = "white", linewidth = 0.2) +
+  scale_fill_manual(
+    values       = tool_colors,
+    name         = "Dominant tool",
+    na.translate = FALSE
+  ) +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  facet_wrap(~ Period, ncol = 2) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.text       = element_blank(),
+    axis.ticks      = element_blank(),
+    strip.text      = element_text(face = "bold", size = 11),
+    legend.position = "bottom",
+    plot.title      = element_text(face = "bold", size = 13),
+    plot.subtitle   = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Dominant simulation tool by country — evolution over time",
+    subtitle = "Arena dominant 2015–2020 | AnyLogic rising from 2018 | Custom code stable in Europe\nGrey = no tool specified or no papers"
+  )
+
+ggsave("outputs/Final/FinalFinal/SW_MAP_EVOL_tool_by_country_period_final.png",
+       width = 14, height = 9, bg = "white")
+## 
+
+papers_country <- tabla %>%
+  filter(!is.na(Country), Country != "Not specified", Country != "") %>%
+  mutate(Country = recode(Country, "USA" = "United States", "Hong Kong" = "China")) %>%
+  count(Country, sort = TRUE)
+
+papers_country$iso_a3 <- countrycode(papers_country$Country,
+                                     "country.name", "iso3c", warn = FALSE)
+
+map_country <- world %>% left_join(papers_country, by = "iso_a3")
+
+# Subtítulo automático con top países
+top_subtitle <- papers_country %>%
+  slice_head(n = 5) %>%
+  mutate(label = paste0(Country, " = ", n)) %>%
+  pull(label) %>%
+  paste(collapse = " | ")
+
+ggplot() +
+  geom_sf(data = world, fill = "#D0D3D4", color = "white", linewidth = 0.2) +
+  geom_sf(data = map_country,
+          aes(fill = n), color = "white", linewidth = 0.2) +
+  scale_fill_gradient(low  = "#D6EAF8", high = "#1A5276",
+                      name = "Papers",
+                      na.value = "#D0D3D4") +
+  coord_sf(xlim = c(-180, 180), ylim = c(-60, 85), expand = FALSE) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid       = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    legend.position  = "bottom",
+    legend.key.width = unit(1.5, "cm"),
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(size = 10, color = "grey40")
+  ) +
+  labs(
+    title    = "Distribution of papers by country",
+    subtitle = top_subtitle
+  )
+
+ggsave("outputs/Final/FinalFinal/G18_map_papers_by_country.png",
+       width = 12, height = 7, bg = "white")
+
+#
+
+val_year <- tabla %>%
+  count(Year, `Validated?`) %>%
+  group_by(Year) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+val_colors <- c("Yes"           = "#1A9641",
+                "Partially"     = "#ABD9E9",
+                "No"            = "#D7191C",
+                "Not specified" = "#BDBDBD")
+
+ggplot(val_year,
+       aes(x = factor(Year), y = n, fill = `Validated?`)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(n > 0, n, "")),
+            position = position_stack(vjust = 0.5),
+            size = 2.8, color = "grey20") +
+  scale_fill_manual(values = val_colors) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title  = element_text(face = "bold", size = 13),
+        plot.subtitle = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Validation status over time",
+       subtitle = paste0("Overall: ",
+                         sum(tabla$`Validated?` == "Yes"), " Yes / ",
+                         sum(tabla$`Validated?` == "Partially"), " Partially / ",
+                         sum(tabla$`Validated?` == "No"), " No"),
+       x = "Year", y = "Number of papers", fill = "Validated?")
+
+ggsave("outputs/Final/FinalFinal/G11_validated_by_year_n.png",
+       width = 11, height = 6, bg = "white")
+
+#sdadsa
+real_term <- tabla %>%
+  count(`Real terminal?`) %>%
+  mutate(
+    pct   = round(n / sum(n) * 100, 1),
+    label = paste0(n, " (", pct, "%)"),
+    nota  = case_when(
+      `Real terminal?` == "Yes"     ~ "Based on a specific\nreal terminal",
+      `Real terminal?` == "Partial" ~ "Uses real terminal data\nbut with simplifications",
+      `Real terminal?` == "No"      ~ "Generic / hypothetical\nterminal"
+    )
+  ) %>%
+  mutate(`Real terminal?` = factor(`Real terminal?`,
+                                   levels = c("Yes", "Partial", "No")))
+
+ggplot(real_term, aes(y = fct_rev(`Real terminal?`),
+                      x = n, fill = `Real terminal?`)) +
+  geom_bar(stat = "identity", color = "white", linewidth = 0.3) +
+  geom_text(aes(label = n), hjust = -0.3, size = 4, color = "grey25", fontface = "bold") +
+  geom_text(aes(label = nota, x = 0.5), hjust = 0,
+            size = 3.2, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("Yes"     = "#2C7BB6",
+                               "Partial" = "#ABD9E9",
+                               "No"      = "#D7191C")) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position    = "none",
+        panel.grid.major.y = element_blank(),
+        plot.title         = element_text(face = "bold", size = 13),
+        plot.subtitle      = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Real terminal basis",
+       subtitle = '"Partial" = real data used but operations simplified or generalized',
+       x = "Count", y = "")
+
+ggsave("outputs/Final/FinalFinal/G03_real_terminal_n.png",
+       width = 9, height = 4, bg = "white")
+
+###
+tabla_val <- tabla %>%
+filter(`Validated?` == "Yes",
+       !is.na(`Validation method`),
+       `Validation method` != "Not specified") %>%
+  mutate(val_raw = strsplit(as.character(`Validation method`), ",\\s*")) %>%
+  tidyr::unnest(val_raw) %>%
+  mutate(val_raw = trimws(val_raw)) %>%
+  mutate(val_grouped = case_when(
+    grepl("historical data|real data|empirical data|observed data|real system",
+          val_raw, ignore.case = TRUE)                        ~ "Historical / real data",
+    grepl("statistical test|statistical anal|robustness|replications",
+          val_raw, ignore.case = TRUE)                        ~ "Statistical tests",
+    grepl("expert judgment|expert judge|operations team|operators",
+          val_raw, ignore.case = TRUE)                        ~ "Expert judgment",
+    grepl("literature comparison",
+          val_raw, ignore.case = TRUE)                        ~ "Literature comparison",
+    grepl("model comparison|comparison with simulation|mathematical comparison",
+          val_raw, ignore.case = TRUE)                        ~ "Model / simulation comparison",
+    grepl("calibration",
+          val_raw, ignore.case = TRUE)                        ~ "Calibration",
+    grepl("animation",
+          val_raw, ignore.case = TRUE)                        ~ "Animation",
+    grepl("theoretical formulas",
+          val_raw, ignore.case = TRUE)                        ~ "Theoretical formulas",
+    TRUE ~ "Other"
+  )) %>%
+  filter(val_grouped != "Other")
+
+val_year <- tabla_val %>%
+  count(Year, val_grouped)
+
+val_colors <- c(
+  "Historical / real data"        = "#8E44AD",
+  "Statistical tests"             = "#F39C12",
+  "Expert judgment"               = "#E67E22",
+  "Literature comparison"         = "#E91E8C",
+  "Model / simulation comparison" = "#27AE60",
+  "Calibration"                   = "#16A085",
+  "Animation"                     = "#2980B9",
+  "Theoretical formulas"          = "#795548"
+)
+
+ggplot(val_year,
+       aes(x = factor(Year), y = n, fill = val_grouped)) +
+  geom_bar(stat = "identity", position = "stack",
+           color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(n > 0, n, "")),
+            position = position_stack(vjust = 0.5),
+            size = 2.8, color = "white", fontface = "bold") +
+  scale_fill_manual(values = val_colors, name = "Validation method") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x     = element_text(angle = 45, hjust = 1),
+        legend.position = "right",
+        plot.title      = element_text(face = "bold", size = 13),
+        plot.subtitle   = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Validation methods over time",
+       subtitle = "Historical / real data consistently dominant; statistical tests emerging post-2018",
+       x = "Year", y = "Number of papers")
+
+ggsave("outputs/Final/FinalFinal/VAL02_validation_methods_by_year_n.png",
+       width = 12, height = 6, bg = "white")
+#sadisakdsa
+install.packages(c("igraph", "ggraph", "tidygraph"))
+
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(dplyr)
+library(tidyr)
+
+# ── Preparar datos: cada paper como conjunto de atributos ─────
+tabla_net <- tabla %>%
+  mutate(
+    Tool_clean = case_when(
+      grepl("Arena",            `Tool / Software`, ignore.case = TRUE) ~ "Arena",
+      grepl("AnyLogic",         `Tool / Software`, ignore.case = TRUE) ~ "AnyLogic",
+      grepl("Custom code|Java|Python|PSIGHOS|SmartSim",
+            `Tool / Software`, ignore.case = TRUE)                     ~ "Custom code",
+      grepl("Plant Simulation", `Tool / Software`, ignore.case = TRUE) ~ "Plant Simulation",
+      grepl("FlexSim|FlexTerm", `Tool / Software`, ignore.case = TRUE) ~ "FlexSim",
+      `Tool / Software` == "Not specified" | is.na(`Tool / Software`) ~ NA_character_,
+      TRUE ~ "Other"
+    )
+  ) %>%
+  select(ID,
+         Paradigm    = `Main paradigm`,
+         Tool        = Tool_clean,
+         TimeHorizon = `Time horizon`,
+         Objective   = `Model objective`,
+         Subprocess  = `Specific subprocess`) %>%
+  mutate(across(everything(), ~ na_if(as.character(.), "Not specified")))
+
+# ── Explotar subprocesos múltiples ────────────────────────────
+tabla_sub <- tabla_net %>%
+  mutate(Subprocess = strsplit(as.character(Subprocess), ",\\s*")) %>%
+  unnest(Subprocess) %>%
+  mutate(Subprocess = trimws(Subprocess)) %>%
+  mutate(Subprocess = case_when(
+    grepl("AGV",                                        Subprocess, ignore.case = TRUE) ~ "AGV routing",
+    grepl("quay crane|crane assign|crane sched",        Subprocess, ignore.case = TRUE) ~ "Quay crane scheduling",
+    grepl("berth",                                      Subprocess, ignore.case = TRUE) ~ "Berth allocation",
+    grepl("traffic|congestion",                         Subprocess, ignore.case = TRUE) ~ "Traffic management",
+    grepl("gate",                                       Subprocess, ignore.case = TRUE) ~ "Gate operations",
+    grepl("truck dispatch|yard truck",                  Subprocess, ignore.case = TRUE) ~ "Truck dispatching",
+    grepl("stacking|retrieval|storage",                 Subprocess, ignore.case = TRUE) ~ "Stacking / storage",
+    grepl("yard plan|yard layout|yard oper",            Subprocess, ignore.case = TRUE) ~ "Yard planning",
+    grepl("layout|design",                              Subprocess, ignore.case = TRUE) ~ "Layout / design",
+    grepl("Not specified|^$|NA",                        Subprocess, ignore.case = TRUE) ~ NA_character_,
+    TRUE ~ Subprocess
+  )) %>%
+  filter(!is.na(Subprocess))
+
+# ── Construir pares de co-ocurrencia por paper ────────────────
+make_pairs <- function(df, col1, col2, id_col = "ID") {
+  df %>%
+    select(all_of(c(id_col, col1, col2))) %>%
+    filter(!is.na(.[[col1]]), !is.na(.[[col2]]),
+           .[[col1]] != .[[col2]]) %>%
+    group_by(across(all_of(c(id_col)))) %>%
+    summarise(from = .[[col1]][1], to = .[[col2]][1], .groups = "drop") %>%
+    count(from, to) %>%
+    filter(from != to)
+}
+
+# Combinar todas las variables en formato largo por paper
+tabla_long <- tabla_sub %>%
+  pivot_longer(cols = c(Paradigm, Tool, TimeHorizon, Objective, Subprocess),
+               names_to = "type", values_to = "node") %>%
+  filter(!is.na(node), node != "NA", node != "Other")
+
+# Generar pares de co-ocurrencia
+edges <- tabla_long %>%
+  group_by(ID) %>%
+  filter(n() >= 2) %>%
+  summarise(pairs = list(combn(node, 2, simplify = FALSE)), .groups = "drop") %>%
+  unnest(pairs) %>%
+  mutate(from = sapply(pairs, `[[`, 1),
+         to   = sapply(pairs, `[[`, 2)) %>%
+  select(from, to) %>%
+  filter(from != to) %>%
+  count(from, to, name = "weight") %>%
+  filter(weight >= 2)  # solo conexiones con al menos 2 co-ocurrencias
+
+# ── Nodos con frecuencia y tipo ───────────────────────────────
+node_freq <- tabla_long %>%
+  count(node, type, name = "freq") %>%
+  group_by(node) %>%
+  slice_max(freq, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# ── Construir grafo ───────────────────────────────────────────
+g <- graph_from_data_frame(edges, directed = FALSE,
+                           vertices = node_freq %>% filter(node %in% c(edges$from, edges$to)))
+
+g <- as_tbl_graph(g) %>%
+  mutate(degree     = centrality_degree(weights = weight),
+         community  = as.factor(group_louvain()))
+
+# ── Colores por tipo de variable ─────────────────────────────
+type_colors <- c(
+  "Paradigm"    = "#2C7BB6",
+  "Tool"        = "#D7191C",
+  "TimeHorizon" = "#8E44AD",
+  "Objective"   = "#E67E22",
+  "Subprocess"  = "#1A9641"
+)
+
+# ── Grafo ─────────────────────────────────────────────────────
+set.seed(42)
+
+ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight, alpha = weight),
+                 color = "grey70") +
+  geom_node_point(aes(size = freq, color = type)) +
+  geom_node_text(aes(label = name, size = freq),
+                 repel = TRUE, max.overlaps = 30,
+                 fontface = "bold", color = "grey20") +
+  scale_edge_width(range = c(0.3, 3), guide = "none") +
+  scale_edge_alpha(range = c(0.2, 0.8), guide = "none") +
+  scale_size_continuous(range = c(3, 14), name = "Frequency") +
+  scale_color_manual(values = type_colors, name = "Variable type") +
+  theme_graph(base_size = 12) +
+  theme(legend.position = "right",
+        plot.title      = element_text(face = "bold", size = 14),
+        plot.subtitle   = element_text(size = 10, color = "grey40")) +
+  labs(title    = "Co-occurrence network of simulation study attributes",
+       subtitle = "Node size = frequency | Edge width = co-occurrence strength | n ≥ 2 connections shown")
+
+ggsave("outputs/Final/FinalFinal/NET_cooccurrence_network.png",
+       width = 14, height = 10, bg = "white")
+
+# =============================================================
+# MAPA DE CO-OCURRENCIA DE TÉRMINOS — estilo VOSviewer
+# Systematic Literature Review — Port Terminal Simulations
+# Basado en abstracts de la hoja "Extracted Data + Decision"
+# =============================================================
+
+# ── Paquetes ──────────────────────────────────────────────────
+# Instala los que falten con:
+# install.packages(c("readxl","tidytext","tidyr","dplyr","ggplot2",
+#                    "widyr","igraph","ggraph","tidygraph","MASS",
+#                    "scales","ggrepel","stringr","forcats"))
+install.packages("widyr")
+library(readxl)
+library(tidytext)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(widyr)       # pairwise_count
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(MASS)        # kde2d para la densidad
+library(scales)
+library(ggrepel)
+library(stringr)
+library(forcats)
+
+# =============================================================
+# PARÁMETROS AJUSTABLES
+# =============================================================
+RUTA_XLSX    <- "data/data.xlsx"      # <- cambia si tu archivo está en otro lugar
+HOJA         <- "Extracted Data + Decision"
+SKIP_ROWS    <- 2                     # filas de encabezado a saltar
+
+MIN_TERM_FREQ  <- 8    # frecuencia mínima para que un término aparezca en el grafo
+MIN_COOC       # se define abajo como función del corpus
+N_TOP_LABELS   <- 40   # cuántos nodos reciben etiqueta de texto
+
+PALETTE_CLUSTERS <- c(
+  "1" = "#C0392B",   # rojo
+  "2" = "#2980B9",   # azul
+  "3" = "#27AE60",   # verde
+  "4" = "#E67E22",   # naranja
+  "5" = "#8E44AD",   # morado
+  "6" = "#16A085",   # verde agua
+  "7" = "#F39C12",   # amarillo
+  "8" = "#7F8C8D"    # gris
+)
+
+# =============================================================
+# 1. CARGA DE DATOS
+# =============================================================
+tabla_raw <- read_excel(RUTA_XLSX, sheet = HOJA, skip = SKIP_ROWS)
+
+# Filtrar solo estudios incluidos y excluir Mathematical Analytical
+tabla <- tabla_raw %>%
+  filter(`Phase 2 Decision` == "Include",
+         `Main paradigm`    != "Mathematical Analytical") %>%
+  mutate(doc_id = row_number())
+
+cat("✓ Papers incluidos:", nrow(tabla), "\n")
+
+# Usar Abstract como fuente principal de texto.
+# Si quieres sumar también el título, descomenta la línea alternativa.
+tabla_text <- tabla %>%
+  select(doc_id, text = Abstract)
+# select(doc_id, text = Title)    # ← alternativa: solo títulos
+# mutate(text = paste(Title, Abstract))  # ← alternativa: título + abstract
+
+# =============================================================
+# 2. TOKENIZACIÓN Y LIMPIEZA
+# =============================================================
+
+# Stopwords base en inglés + dominio portuario genérico
+extra_stopwords <- tibble(word = c(
+  "paper", "study", "model", "models", "simulation", "simulations",
+  "based", "proposed", "results", "result", "show", "shows", "shown",
+  "using", "used", "use", "also", "can", "due", "order", "set",
+  "two", "three", "one", "time", "number", "different", "new",
+  "approach", "method", "system", "systems", "process", "processes",
+  "data", "case", "al", "et", "include", "including",
+  "however", "thus", "furthermore", "therefore", "presented",
+  "analyze", "analysis", "evaluated", "developed", "obtained",
+  "applied", "consider", "considered", "provide", "provides",
+  "conducted", "found", "make", "made", "may", "well", "various",
+  "several", "many", "large", "high", "low", "specific",
+  "overall", "total", "each", "per", "de", "la", "el",
+  "2021","2022","2023","2024","2025","2020","2019","2018"
+))
+
+tokens <- tabla_text %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "^[a-z][a-z-]+$")) %>%   # solo letras (y guiones)
+  anti_join(stop_words, by = "word") %>%
+  anti_join(extra_stopwords, by = "word") %>%
+  filter(nchar(word) >= 3)
+
+# Frecuencia global de términos
+term_freq <- tokens %>%
+  count(word, sort = TRUE)
+
+cat("✓ Vocabulario total tras limpieza:", nrow(term_freq), "términos\n")
+cat("Top 20 términos:\n")
+print(head(term_freq, 20))
+
+# =============================================================
+# 3. CO-OCURRENCIA POR DOCUMENTO
+# =============================================================
+MIN_COOC <- max(3, floor(nrow(tabla) * 0.04))   # ~4% de los papers
+cat("✓ Umbral de co-ocurrencia:", MIN_COOC, "\n")
+
+# Mantener solo términos suficientemente frecuentes
+top_terms <- term_freq %>%
+  filter(n >= MIN_TERM_FREQ) %>%
+  pull(word)
+
+tokens_filtered <- tokens %>%
+  filter(word %in% top_terms)
+
+# Pares de co-ocurrencia dentro del mismo documento
+cooc <- tokens_filtered %>%
+  pairwise_count(word, doc_id, sort = TRUE, upper = FALSE) %>%
+  filter(n >= MIN_COOC)
+
+cat("✓ Pares de co-ocurrencia (n >=", MIN_COOC, "):", nrow(cooc), "\n")
+
+# =============================================================
+# 4. GRAFO + DETECCIÓN DE COMUNIDADES
+# =============================================================
+g <- graph_from_data_frame(
+  cooc %>% rename(from = item1, to = item2, weight = n),
+  directed = FALSE,
+  vertices  = term_freq %>% filter(word %in% unique(c(cooc$item1, cooc$item2)))
+)
+
+# Comunidades de Louvain (equivalente a VOSviewer clusters)
+set.seed(42)
+comm <- cluster_louvain(g, weights = E(g)$weight)
+V(g)$cluster <- as.character(membership(comm))
+V(g)$freq    <- V(g)$n        # columna n viene del data.frame de vértices
+
+tg <- as_tbl_graph(g)
+
+# Layout Fruchterman-Reingold ponderado
+set.seed(42)
+layout_fr <- create_layout(tg, layout = "fr",
+                           weights = E(tg)$weight)
+
+# =============================================================
+# 5. MAPA DE DENSIDAD (imitando VOSviewer)
+# =============================================================
+
+# Coordenadas de nodos
+xy <- layout_fr %>% select(x, y, freq)
+
+# KDE suavizado
+kde <- kde2d(xy$x, xy$y,
+             h  = c(bandwidth.nrd(xy$x) * 2,
+                    bandwidth.nrd(xy$y) * 2),
+             n  = 200,
+             lims = c(range(xy$x) + c(-1, 1),
+                      range(xy$y) + c(-1, 1)))
+
+kde_df <- expand.grid(x = kde$x, y = kde$y) %>%
+  mutate(density = as.vector(kde$z))
+
+# Nodos con etiqueta (los N_TOP_LABELS más frecuentes)
+top_nodes <- layout_fr %>%
+  arrange(desc(freq)) %>%
+  slice_head(n = N_TOP_LABELS)
+
+# =============================================================
+# 6. VISUALIZACIÓN FINAL
+# =============================================================
+ggplot() +
+  
+  # Capa de densidad (fondo oscuro con halos de color)
+  geom_raster(data = kde_df,
+              aes(x = x, y = y, fill = density),
+              interpolate = TRUE) +
+  scale_fill_gradientn(
+    colours = c("black", "#1a0a2e", "#2d0a4e",
+                "#8B0000", "#CC2200", "#FF4500",
+                "#FF8C00", "#FFD700", "#FFFACD"),
+    values  = scales::rescale(c(0, 0.05, 0.12, 0.22,
+                                0.35, 0.50, 0.65, 0.82, 1)),
+    guide   = "none"
+  ) +
+  
+  # Aristas (muy tenues sobre el fondo oscuro)
+  geom_edge_link(data = layout_fr,
+                 aes(x = x, y = y, xend = xend, yend = yend,
+                     alpha = weight, width = weight),
+                 color = "white", show.legend = FALSE) +
+  scale_edge_alpha(range = c(0.02, 0.12), guide = "none") +
+  scale_edge_width(range = c(0.1, 0.8),  guide = "none") +
+  
+  # Nodos coloreados por clúster
+  geom_point(data = layout_fr,
+             aes(x = x, y = y, size = freq,
+                 color = cluster),
+             alpha = 0.85, show.legend = FALSE) +
+  scale_size_continuous(range = c(1.5, 10), guide = "none") +
+  scale_color_manual(values = PALETTE_CLUSTERS,
+                     na.value = "grey70") +
+  
+  # Etiquetas de texto blancas
+  geom_text_repel(data = top_nodes,
+                  aes(x = x, y = y, label = word,
+                      size = freq),
+                  color        = "white",
+                  bg.color     = NA,
+                  fontface     = "bold",
+                  max.overlaps = 40,
+                  segment.color = "white",
+                  segment.alpha = 0.3,
+                  box.padding  = 0.25,
+                  point.padding = 0.1,
+                  show.legend  = FALSE) +
+  scale_size_continuous(range = c(2.5, 6)) +
+  
+  # Tema oscuro imitando VOSviewer
+  coord_fixed() +
+  theme_void() +
+  theme(
+    plot.background  = element_rect(fill = "black", color = NA),
+    panel.background = element_rect(fill = "black", color = NA),
+    plot.title       = element_text(color = "white", face = "bold",
+                                    size = 15, hjust = 0.5),
+    plot.subtitle    = element_text(color = "grey70", size = 9,
+                                    hjust = 0.5),
+    plot.caption     = element_text(color = "grey50", size = 7,
+                                    hjust = 1),
+    plot.margin      = margin(12, 12, 12, 12)
+  ) +
+  labs(
+    title    = "Term Co-occurrence Density Map",
+    subtitle = paste0("n = ", nrow(tabla),
+                      " studies | min. term frequency = ", MIN_TERM_FREQ,
+                      " | min. co-occurrence = ", MIN_COOC),
+    caption  = "Node color = Louvain community | Node size = term frequency | Halo intensity = local term density"
+  )
+
+# =============================================================
+# 7. GUARDAR
+# =============================================================
+ggsave("outputs/TERM_COOC_density_map.png",
+       width = 13, height = 10, dpi = 300, bg = "black")
+
+cat("✓ Gráfico guardado en outputs/TERM_COOC_density_map.png\n")
+
+# =============================================================
+# OPCIONAL: tabla de términos por clúster
+# =============================================================
+cluster_tbl <- tibble(
+  word    = V(g)$name,
+  freq    = V(g)$freq,
+  cluster = V(g)$cluster
+) %>%
+  arrange(cluster, desc(freq))
+
+cat("\n── Top 5 términos por clúster ──\n")
+cluster_tbl %>%
+  group_by(cluster) %>%
+  slice_head(n = 5) %>%
+  print(n = Inf)
