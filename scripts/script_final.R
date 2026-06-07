@@ -3821,3 +3821,319 @@ cluster_tbl %>%
   group_by(cluster) %>%
   slice_head(n = 5) %>%
   print(n = Inf)
+
+install.packages(c("tidytext", "widyr", "igraph", "ggraph", "tidygraph", "MASS", "ggrepel"))
+
+# =============================================================
+# TERM CO-OCCURRENCE NETWORK — estilo VOSviewer
+# Systematic Literature Review — Simulación en terminales portuarios
+# Fuente: columna Abstract de la hoja "Data" (n = 87 incluidos)
+# =============================================================
+
+# ── Paquetes ──────────────────────────────────────────────────
+# install.packages(c("readxl","tidytext","tidyr","dplyr","ggplot2",
+#                    "widyr","igraph","ggraph","tidygraph","MASS",
+#                    "scales","ggrepel","stringr","forcats"))
+
+library(MASS)        # kde2d — cargar ANTES de dplyr para evitar conflicto con select()
+library(readxl)
+library(tidytext)
+library(tidyr)
+library(dplyr)       # dplyr::select queda activo al cargarse después de MASS
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(widyr)       # pairwise_count
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(scales)
+library(ggrepel)
+
+# =============================================================
+# PARÁMETROS
+# =============================================================
+RUTA_XLSX     <- "data/data.xlsx"   # ajusta si es necesario
+MIN_TERM_FREQ <- 6    # frecuencia mínima de un término en los docs
+MIN_COOC      <- 4    # co-ocurrencias mínimas entre un par
+N_TOP_LABELS  <- 55   # nodos con etiqueta de texto visible
+
+PALETTE <- c(
+  "1" = "#E53935",   # rojo       — operaciones de patio / camiones
+  "2" = "#1E88E5",   # azul       — grúas / optimización
+  "3" = "#43A047",   # verde      — automatización / decisiones
+  "4" = "#FB8C00",   # naranja    — equipos / evaluación
+  "5" = "#8E24AA",   # morado     — diseño / throughput
+  "6" = "#00ACC1",   # cyan
+  "7" = "#F4511E",   # naranja oscuro
+  "8" = "#546E7A"    # gris azul
+)
+
+# =============================================================
+# 1. CARGA Y FILTRADO
+# =============================================================
+tabla_ext <- read_excel(RUTA_XLSX,
+                        sheet = "Extracted Data + Decision",
+                        skip  = 2)
+tabla_ext <- subset(tabla_ext, `Phase 2 Decision` == "Include")
+tabla_ext <- subset(tabla_ext, `Main paradigm`    != "Mathematical Analytical")
+ids_incl  <- unique(as.character(tabla_ext$ID))
+
+tabla_data <- read_excel(RUTA_XLSX, sheet = "Data")
+tabla_data$ID <- as.character(tabla_data$ID)
+tabla_abs  <- tabla_data %>%
+  filter(ID %in% ids_incl, !is.na(Abstract)) %>%
+  mutate(doc_id = row_number()) %>%
+  select(doc_id, Abstract)
+
+cat("✓ Papers con abstract:", nrow(tabla_abs), "\n")
+
+# =============================================================
+# 2. STOPWORDS — inglés + ruido editorial + dominio genérico
+# =============================================================
+custom_stop <- tibble(word = c(
+  # ruido editorial / metadata
+  "authors","elsevier","springer","wiley","ieee","copyright",
+  "reserved","rights","journal","publisher","published","publication",
+  # genérico inglés (no incluidos en tidytext)
+  "paper","study","studies","research","approach","method","methods",
+  "proposed","presents","present","propose","proposes",
+  "used","using","results","result","work","problem","solution",
+  "objective","objectives","number","time","different","new",
+  "also","well","including","high","low","large","small",
+  "various","several","real","case","shown","demonstrate","demonstrates",
+  "however","therefore","thus","order","set","provide","provides",
+  "increasing","increased","increase","reduce","reducing","reduction",
+  "improve","improved","improving","improvement","significant","significantly",
+  "achieve","achieved","existing","develop","developed","developing",
+  "evaluate","evaluated","evaluating","consider","considering","considered",
+  "address","addressing","compare","compared","comparison",
+  "apply","applied","applying","based","make","made","take","taken",
+  "give","given","show","indicate","indicates","indicated",
+  # dominio genérico portuario
+  "port","ports","terminal","terminals","container","containers",
+  "ship","ships","vessel","vessels","shipping","marine",
+  "cargo","logistics","transport","transportation","maritime",
+  "simulation","simulations","simulate","simulated","simulator",
+  "model","models","modeling","modelling","modeled",
+  "discrete","event","agent","system","systems","dynamics",
+  "performance","efficiency","operations","operational",
+  "data","analysis","framework","approach"
+))
+
+# =============================================================
+# 3. TOKENIZACIÓN
+# =============================================================
+tokens <- tabla_abs %>%
+  unnest_tokens(word, Abstract) %>%
+  filter(str_detect(word, "^[a-z][a-z-]{2,}$")) %>%   # solo letras
+  anti_join(stop_words,   by = "word") %>%
+  anti_join(custom_stop,  by = "word") %>%
+  filter(nchar(word) >= 4)
+
+# Frecuencia global
+term_freq <- tokens %>%
+  count(word, sort = TRUE)
+
+cat("✓ Vocabulario tras limpieza:", nrow(term_freq), "términos\n")
+cat("Top 25:\n"); print(head(term_freq, 25))
+
+# =============================================================
+# 4. CO-OCURRENCIA POR DOCUMENTO
+# =============================================================
+top_terms <- term_freq %>%
+  filter(n >= MIN_TERM_FREQ) %>%
+  pull(word)
+
+cat("✓ Términos con freq >=", MIN_TERM_FREQ, ":", length(top_terms), "\n")
+
+cooc <- tokens %>%
+  filter(word %in% top_terms) %>%
+  distinct(doc_id, word) %>%           # un token por doc (evita doble conteo)
+  pairwise_count(word, doc_id,
+                 sort = TRUE,
+                 upper = FALSE) %>%
+  filter(n >= MIN_COOC)
+
+cat("✓ Pares con co-ocurrencia >=", MIN_COOC, ":", nrow(cooc), "\n")
+
+# =============================================================
+# 5. GRAFO + COMUNIDADES LOUVAIN
+# =============================================================
+g <- graph_from_data_frame(
+  cooc %>% rename(from = item1, to = item2, weight = n),
+  directed = FALSE,
+  vertices  = term_freq %>%
+    filter(word %in% unique(c(cooc$item1, cooc$item2))) %>%
+    rename(name = word, freq = n)
+)
+
+# Mantener solo nodos con grado >= 2
+g <- induced_subgraph(g, V(g)[degree(g) >= 2])
+
+set.seed(42)
+comm  <- cluster_louvain(g, weights = E(g)$weight)
+V(g)$cluster <- as.character(membership(comm))
+V(g)$freq    <- V(g)$freq   # ya estaba en los atributos
+
+tg <- as_tbl_graph(g)
+cat("✓ Nodos:", gorder(g), "| Aristas:", gsize(g), "\n")
+cat("✓ Comunidades:", length(unique(membership(comm))), "\n")
+
+# Top términos por comunidad
+for (i in sort(unique(membership(comm)))) {
+  nodes_i <- V(g)[membership(comm) == i]$name
+  top5    <- head(nodes_i[order(-V(g)[membership(comm) == i]$freq)], 5)
+  cat(sprintf("  Cluster %d: %s\n", i, paste(top5, collapse = ", ")))
+}
+
+# =============================================================
+# 6. LAYOUT Fruchterman-Reingold ponderado
+# =============================================================
+set.seed(42)
+layout_fr <- create_layout(tg, layout = "fr",
+                           weights = E(tg)$weight)
+
+# =============================================================
+# 7. MAPA DE DENSIDAD TIPO VOSVIEWER
+# =============================================================
+
+# Coordenadas y pesos de nodos
+xy <- layout_fr %>% select(x, y, freq)
+
+# KDE 2D
+kde <- kde2d(xy$x, xy$y,
+             h    = c(bandwidth.nrd(xy$x) * 2.2,
+                      bandwidth.nrd(xy$y) * 2.2),
+             n    = 250,
+             lims = c(range(xy$x) + c(-0.5, 0.5),
+                      range(xy$y) + c(-0.5, 0.5)))
+
+kde_df <- expand.grid(x = kde$x, y = kde$y) %>%
+  mutate(density = as.vector(kde$z),
+         density = density / max(density))
+
+# Colormap VOSviewer: negro → azul oscuro → rojo → naranja → amarillo pálido
+vos_colors <- c(
+  "#000000", "#0a0a2e", "#1a0a5e",
+  "#7b0000", "#cc2200", "#ff4500",
+  "#ff8c00", "#ffd700", "#fffacd"
+)
+vos_values <- c(0, 0.12, 0.28, 0.44, 0.58, 0.70, 0.82, 0.92, 1.00)
+
+# Nodos con etiqueta: top N por (grado × frecuencia)
+deg_score <- degree(g) * V(g)$freq
+label_nodes <- names(sort(deg_score, decreasing = TRUE))[seq_len(N_TOP_LABELS)]
+
+layout_fr <- layout_fr %>%
+  mutate(label_show = name %in% label_nodes)
+
+# =============================================================
+# 8. PLOT FINAL
+# =============================================================
+max_freq <- max(layout_fr$freq)
+
+p <- ggplot() +
+  
+  # ── Fondo de densidad ──────────────────────────────────────
+  geom_raster(data = kde_df,
+              aes(x = x, y = y, fill = density),
+              interpolate = TRUE) +
+  scale_fill_gradientn(
+    colours = vos_colors,
+    values  = vos_values,
+    guide   = "none"
+  ) +
+  
+  # ── Aristas ────────────────────────────────────────────────
+  geom_edge_link(
+    data = layout_fr,
+    aes(x = x, y = y, xend = xend, yend = yend,
+        alpha = weight, linewidth = weight),
+    color = "white",
+    show.legend = FALSE
+  ) +
+  scale_edge_alpha(range    = c(0.02, 0.15), guide = "none") +
+  scale_edge_linewidth(range = c(0.15, 0.9),  guide = "none") +
+  
+  # ── Nodos ──────────────────────────────────────────────────
+  geom_node_point(
+    data = layout_fr,
+    aes(x = x, y = y,
+        size  = freq,
+        color = cluster),
+    alpha = 0.88, stroke = 0.4,
+    show.legend = FALSE
+  ) +
+  scale_size_continuous(range = c(2, 11), guide = "none") +
+  scale_color_manual(values = PALETTE, na.value = "grey70") +
+  
+  # ── Etiquetas ──────────────────────────────────────────────
+  geom_text_repel(
+    data = layout_fr %>% filter(label_show),
+    aes(x = x, y = y, label = name,
+        size  = freq,
+        color = cluster),
+    fontface      = "bold",
+    bg.color      = NA,
+    max.overlaps  = 35,
+    segment.color = "white",
+    segment.alpha = 0.25,
+    box.padding   = 0.20,
+    point.padding = 0.08,
+    show.legend   = FALSE
+  ) +
+  scale_size_continuous(range = c(2.5, 5.5)) +
+  
+  # ── Tema oscuro ────────────────────────────────────────────
+  coord_fixed() +
+  theme_void(base_size = 12) +
+  theme(
+    plot.background  = element_rect(fill = "black", color = NA),
+    panel.background = element_rect(fill = "black", color = NA),
+    plot.title       = element_text(color = "white", face = "bold",
+                                    size = 14, hjust = 0.5,
+                                    margin = margin(t = 8, b = 4)),
+    plot.subtitle    = element_text(color = "grey65", size = 8,
+                                    hjust = 0.5,
+                                    margin = margin(b = 6)),
+    plot.caption     = element_text(color = "grey45", size = 7,
+                                    hjust = 1),
+    plot.margin      = margin(10, 10, 10, 10)
+  ) +
+  labs(
+    title    = "Term Co-occurrence Network — Port Terminal Simulation Studies",
+    subtitle = paste0(
+      "n = ", nrow(tabla_abs), " included studies",
+      "  |  min. term freq = ", MIN_TERM_FREQ,
+      "  |  min. co-occurrence = ", MIN_COOC,
+      "  |  node size ∝ frequency  |  color = Louvain cluster"
+    ),
+    caption  = "Source: abstracts from included studies — Mathematical Analytical paradigm excluded"
+  )
+
+# =============================================================
+# 9. GUARDAR
+# =============================================================
+ggsave("outputs/TERM_COOC_network_final.png",
+       plot   = p,
+       width  = 14, height = 10,
+       dpi    = 300, bg = "black")
+
+cat("✓ Guardado en outputs/TERM_COOC_network_final.png\n")
+
+# =============================================================
+# OPCIONAL: tabla de términos por clúster
+# =============================================================
+cluster_tbl <- tibble(
+  word    = V(g)$name,
+  freq    = V(g)$freq,
+  cluster = V(g)$cluster
+) %>%
+  arrange(cluster, desc(freq))
+
+cat("\n── Top 6 términos por clúster ──\n")
+cluster_tbl %>%
+  group_by(cluster) %>%
+  slice_head(n = 6) %>%
+  print(n = Inf)
