@@ -44,7 +44,7 @@ papers_year <- tabla %>%
 ggplot(papers_year, aes(x = factor(Year), y = n)) +
   geom_bar(stat = "identity", fill = "#2C7BB6",
            color = "white", linewidth = 0.3, width = 0.8) +
-  geom_text(aes(label = paste0(n, "\n(", pct, "%)")),
+  geom_text(aes(label = n),
             vjust = -0.3, size = 3, color = "grey25") +
   scale_y_continuous(breaks = seq(0, 20, 5),
                      expand = expansion(mult = c(0, 0.2))) +
@@ -363,27 +363,41 @@ ggsave("outputs/G12_software_evolution_final.png",
 # ── G13: Includes animation? por año ─────────────────────────
 anim_year <- tabla %>%
   count(Year, `Includes animation?`) %>%
+  tidyr::complete(Year, `Includes animation?` = c("Yes", "No"),
+                  fill = list(n = 0)) %>%
   group_by(Year) %>%
-  mutate(pct = round(n / sum(n) * 100, 1))
+  mutate(total = sum(n)) %>%
+  arrange(Year, `Includes animation?` == "No") %>%  # Yes primero (abajo), No después (arriba)
+  mutate(ypos = cumsum(n) - n / 2) %>%
+  ungroup()
+
+anim_totals <- anim_year %>% distinct(Year, total)
 
 ggplot(anim_year,
        aes(x = factor(Year), y = n, fill = `Includes animation?`)) +
   geom_bar(stat = "identity", position = "stack",
            color = "white", linewidth = 0.3) +
-  geom_text(data = subset(anim_year,
-                          `Includes animation?` == "Yes" & n > 0),
-            aes(label = paste0(n, " (", pct, "%)")),
-            position = position_stack(vjust = 0.5),
-            size = 2.8, color = "white", fontface = "bold") +
+  # Etiquetas n, posicionadas manualmente dentro de cada segmento
+  geom_text(data = subset(anim_year, n > 0),
+            aes(x = factor(Year), y = ypos, label = n,
+                color = `Includes animation?`),
+            inherit.aes = FALSE,
+            size = 2.8, fontface = "bold", show.legend = FALSE) +
+  scale_color_manual(values = c("Yes" = "white", "No" = "grey30")) +
+  # Total arriba de cada barra
+  geom_text(data = anim_totals,
+            aes(x = factor(Year), y = total, label = total),
+            inherit.aes = FALSE,
+            vjust = -0.3, size = 3, color = "grey25", fontface = "bold") +
   scale_fill_manual(values = c("Yes" = "#E67E22", "No" = "#BDBDBD")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
   theme_minimal(base_size = 12) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   labs(title    = "Includes animation? — evolution over time",
-       subtitle = paste0("Overall: 13 Yes (15%) — labeled inside bars"),
+       subtitle = paste0("Overall: ", sum(tabla$`Includes animation?` == "Yes"), " Yes"),
        x = "Year", y = "Number of papers", fill = "Includes animation?")
 ggsave("outputs/G13_animation_by_year_final.png",
        width = 11, height = 6, bg = "white")
-
 # =============================================================
 # BLOQUE 7 — SOSTENIBILIDAD Y OBJETIVO DEL MODELO
 # =============================================================
